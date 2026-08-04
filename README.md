@@ -44,6 +44,7 @@ const { ok, lap } = await runDemo({ config, scenarioPath: "docs/demok/pelda.yaml
 | | |
 |---|---|
 | **kurzor + kattintás-hullám** | a Playwright trace-ből, a `playwright-recast`-tal |
+| **tett-jelzés** | *mit* csinálunk, nem csak hol: gyűrű + címke a beírásra, billentyűre, görgetésre, kattintásra |
 | **reflektor** | tetszőleges terület kiemelése: keret + háttér-sötétítés + rövid szöveg |
 | **magyarázat-sáv** | a lap aljára injektálva, ezért a tempó-vezérléssel együtt mozog |
 | **tempó** | az üresjárat gyorsítása, a cselekvés normál tempóban; „levegő” a kiemelések közt |
@@ -51,6 +52,23 @@ const { ok, lap } = await runDemo({ config, scenarioPath: "docs/demok/pelda.yaml
 | **kritérium-választás** | listából a megfelelő példány, kiírva melyik — nem „az első sor” |
 | **előkészítés** | `elokeszites:` — a demó ELŐÁLLÍTJA, amit mutat; külön kontextus, nem kerül a felvételre |
 | **elvárás-kapu** | a demó csak akkor készül el, ha a bemutatott út végigjárható |
+
+### Két jelzés, két jelentés — ne mosd össze
+
+| jel | szín | mit mond |
+|---|---|---|
+| **reflektor** (keret + háttér-sötétítés + buborék) | petrol | *„ide nézz"* — hol van, amiről a felirat beszél |
+| **tett-jelzés** (gyűrű + monospace címke) | rózsa | *„ezt csinálom"* — `beír Tatár Padló`, `gomb Enter`, `kattint Logisztika` |
+
+A `clickEffect` hulláma a trace-ből jön, tehát **csak a valódi egérkattintást** mutatja. A
+beírás, a billentyű és a görgetés a felvételen egyébként **nyomtalan**: a mező értéke
+egyszerre megjelenik, mintha magától történt volna — a néző a *helyet* látja, a *cselekvést*
+nem. Kattintásnál a tett-jelzés ezért csak címkét ad, gyűrűt nem (két egymásra rajzolt kör
+zavarna).
+
+⚠ A címke előtagja **szó, nem piktogram**: a headless Chromium fontkészletéből hiányzik a
+legtöbb szimbólum-glif — a `⌨` mérve `=`-ként renderelődött, vagyis a jelzés, aminek a
+megértést kellene segítenie, értelmetlen jelet mutatott. Ez csak a kész videón derül ki.
 
 ### `elokeszites:` — amikor a bemutatandó adat nem létezik
 

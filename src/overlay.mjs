@@ -70,6 +70,72 @@ export function overlayScript({ mobil = false, balOffset = 0, jobbOffset = 0 } =
     bu.style.transform = 'translate(' + Math.round(x) + 'px,' + Math.round(y) + 'px)'
   }
 
+  // TETT-jelzés: mit csinálunk a felülettel, nem csak hol.
+  //
+  // ⚠⚠ EBBEN A BLOKKBAN NINCS BACKTICK — se kódban, se KOMMENTBEN. Az egész IIFE egy
+  // template literal belseje, tehát egyetlen backtick lezárja a stringet, és a hiba a fájl
+  // EGY MÁSIK pontján jelentkezik ("Unexpected identifier"). Kétszer futottam bele.
+  //
+  // A clickEffect hulláma a trace-ből jön, tehát CSAK a valódi egérkattintást mutatja.
+  // A beírás, a billentyű és a görgetés a felvételen NYOMTALAN: a mező értéke egyszerre
+  // megjelenik, mintha magától történt volna. A néző így a HELYET látja, a CSELEKVÉST nem.
+  //
+  // A gyűrű szándékosan MÁS színű (rózsa), mint a reflektor (petrol): a kettő két külön
+  // dolgot mond — „ide nézz" vs. „ezt csinálom". Egy színnel a néző összemosná őket.
+  window.__demoTett = (b, ikon, szoveg, gyuruvel) => {
+    beallitT()
+    const g = document.getElementById('__demo_gyuru')
+    const c = document.getElementById('__demo_tett')
+    if (!g || !c) return
+    if (!b) { g.classList.remove('lat'); c.classList.remove('lat'); return }
+    if (gyuruvel !== false) {
+      const meret = Math.max(34, Math.min(b.w, b.h) + 16)
+      g.style.width = meret + 'px'; g.style.height = meret + 'px'
+      g.style.transform = 'translate(' + Math.round(b.x + b.w / 2 - meret / 2) + 'px,' +
+        Math.round(b.y + b.h / 2 - meret / 2) + 'px)'
+      g.classList.remove('lat'); void g.offsetWidth; g.classList.add('lat')
+    } else {
+      g.classList.remove('lat')
+    }
+    if (!szoveg && !ikon) { c.classList.remove('lat'); return }
+    c.innerHTML = (ikon ? '<i>' + ikon + '</i>' : '') + (szoveg || '')
+    c.classList.add('lat')
+    const bb = c.getBoundingClientRect()
+    // A címke a doboz FÖLÉ megy, ha ott elfér — a beírt érték maga a mezőben jelenik meg,
+    // tehát alá téve eltakarná a saját eredményét.
+    const felette = b.y - bb.height - 12
+    const y = felette > 8 ? felette : Math.min(b.y + b.h + 12, window.innerHeight - bb.height - 90)
+    const x = Math.min(Math.max(8, b.x + b.w / 2 - bb.width / 2), window.innerWidth - bb.width - 8)
+    c.style.transform = 'translate(' + Math.round(x) + 'px,' + Math.round(y) + 'px)'
+  }
+
+  function beallitT() {
+    if (document.getElementById('__demo_gyuru')) return
+    const s = document.createElement('style')
+    s.textContent = \`
+      @keyframes __demo_pulzus{0%{transform:scale(.55);opacity:0}
+        35%{opacity:1}100%{transform:scale(1.9);opacity:0}}
+      #__demo_gyuru{position:fixed;left:0;top:0;z-index:2147483646;pointer-events:none;
+        border-radius:50%;border:3px solid #e11d48;box-shadow:0 0 0 3px rgba(225,29,72,.22);
+        opacity:0}
+      #__demo_gyuru.lat{opacity:1}
+      #__demo_gyuru.lat::after{content:'';position:absolute;inset:-3px;border-radius:50%;
+        border:3px solid #e11d48;animation:__demo_pulzus 1.1s ease-out infinite}
+      #__demo_tett{position:fixed;left:0;top:0;z-index:2147483646;pointer-events:none;
+        max-width:${m(280, 420)}px;padding:${m(6, 8)}px ${m(10, 13)}px;border-radius:8px;
+        background:#e11d48;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+        font:600 ${m(12, 15)}px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;
+        box-shadow:0 4px 14px rgba(0,0,0,.35);
+        opacity:0;transition:opacity .2s ease,transform .3s cubic-bezier(.22,.61,.36,1)}
+      #__demo_tett.lat{opacity:1}
+      #__demo_tett i{font-style:normal;margin-right:6px;opacity:.9}
+    \`
+    document.head.appendChild(s)
+    const g = document.createElement('div'); g.id = '__demo_gyuru'
+    const c = document.createElement('div'); c.id = '__demo_tett'
+    document.body.append(g, c)
+  }
+
   function beallitB() {
     if (document.getElementById('__demo_keret')) return
     const s = document.createElement('style')

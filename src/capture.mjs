@@ -40,7 +40,7 @@ export function feloldDatum(ertek, most = new Date()) {
  * feliratot, a reflektort és a nézői szüneteket — a CSELEKVÉS azonos marad.
  */
 async function vegrehajtLepes({ page, lepes, keret }) {
-  const { felvetel, feliratoz, reflektor, reflektorOff, fk, config, cimke } = keret
+  const { felvetel, feliratoz, reflektor, reflektorOff, tett, tettOff, fk, config, cimke } = keret
 
   if (lepes.megnyit) {
     await page.goto(`${config.baseUrl}${lepes.megnyit}`, { waitUntil: "networkidle", timeout: 45000 })
@@ -57,7 +57,14 @@ async function vegrehajtLepes({ page, lepes, keret }) {
     await page.waitForTimeout(lepes.buborekIdo ?? 1900)
   }
 
-  if (lepes.kattint) await page.locator(lepes.kattint).first().click()
+  if (lepes.kattint) {
+    const cel = page.locator(lepes.kattint).first()
+    // A hullámot a recast rajzolja a trace-ből (pontos időzítéssel) — mi a CÍMKÉT tesszük
+    // mellé, gyűrű nélkül: két egymásra rajzolt kör zavaros lenne.
+    await tett(cel, "kattint", lepes.kattintCimke, false)
+    await cel.click()
+    await tettOff()
+  }
 
   // Kritérium szerinti választás listából. Enélkül a demó „az első sort" mutatja, tehát
   // MINDEN FUTÁS MÁST — és a magyarázat elcsúszhat a képtől. A választott példányt
@@ -89,7 +96,9 @@ async function vegrehajtLepes({ page, lepes, keret }) {
           `de a cselekvés célja hiányzik belőle`
       )
     }
+    await tett(cel, "kattint", lepes.kattintCimke ?? ((await cel.innerText().catch(() => "")) || "").trim().split("\n")[0], false)
     await cel.click()
+    await tettOff()
   }
 
   if (buborekCel && !lepes.fokusz) await reflektorOff()
@@ -101,13 +110,33 @@ async function vegrehajtLepes({ page, lepes, keret }) {
     }
   }
 
-  if (lepes.kitolt) await page.fill(lepes.kitolt.mezo, feloldDatum(lepes.kitolt.ertek))
-  if (lepes.billentyu) await page.keyboard.press(lepes.billentyu)
+  if (lepes.kitolt) {
+    // ⚠ A beírás a felvételen NYOMTALAN: a mező értéke egyszerre megjelenik, mintha magától
+    // történt volna. A gyűrű + a beírt érték mutatja meg, hogy MI történik — a `clickEffect`
+    // ide nem ér el, mert az csak valódi egérkattintást lát a trace-ben.
+    const mezo = page.locator(lepes.kitolt.mezo).first()
+    const ertek = feloldDatum(lepes.kitolt.ertek)
+    await tett(mezo, "beír", lepes.kitolt.cimke ?? ertek)
+    await page.fill(lepes.kitolt.mezo, ertek)
+    if (felvetel) await page.waitForTimeout(lepes.kitolt.ido ?? 900)
+    await tettOff()
+  }
+
+  if (lepes.billentyu) {
+    // A billentyű a fókuszált elemen hat — a jelzés is oda kerül. Ha nincs fókusz (vagy nem
+    // mérhető), a címke akkor is kimegy: a néma billentyű a legrosszabb, mert a képernyő
+    // magától változik meg.
+    await tett(page.locator(":focus").first(), "gomb", lepes.billentyu)
+    await page.keyboard.press(lepes.billentyu)
+    if (felvetel) await page.waitForTimeout(700)
+    await tettOff()
+  }
 
   if (lepes.gorget) {
     // Az egeret az elem fölé visszük, hogy a BELSŐ panel görögjön, ne az oldal.
     const cel = page.locator(lepes.gorget.hol).first()
     await cel.waitFor({ state: "visible", timeout: 10000 })
+    await tett(cel, "görget", lepes.gorget.cimke ?? "", false)
     await cel.hover()
     // Apró lépés + szünet: a görgetés a nézőnek KÖVETHETŐ legyen, ne ugorjon.
     const teljes = lepes.gorget.mennyi ?? 400
@@ -118,6 +147,7 @@ async function vegrehajtLepes({ page, lepes, keret }) {
       await page.mouse.wheel(0, teljes / lepesszam)
       await page.waitForTimeout(szunet)
     }
+    await tettOff()
   }
 
   if (felvetel) {
@@ -186,7 +216,9 @@ async function elokeszit({ fk, config, chromium, browser }) {
   const eredmenyek = await futtatLepeseket({
     page,
     lepesek: fk.elokeszites,
-    keret: { felvetel: false, fk, config },
+    // Az előkészítés nem kerül a felvételre, tehát a vizuális jelzések itt no-opok — de a
+    // FÜGGVÉNYEKNEK létezniük kell, különben a közös lépés-értelmező elhasalna rajtuk.
+    keret: { felvetel: false, tett: async () => {}, tettOff: async () => {}, fk, config },
   })
   await ctx.close()
 
@@ -295,6 +327,41 @@ export async function capture({ fk, config, chromium }) {
     return true
   }
 
+  /**
+   * TETT-jelzés: gyűrű + címke arról, hogy MIT csinálunk — nem csak hol.
+   *
+   * A `gyuruvel: false` a kattintásra való: ott a hullámot a `clickEffect` rajzolja a
+   * trace-ből, pontos időzítéssel, és két egymásra rajzolt kör csak zavarna.
+   *
+   * ⚠ Az `ikon` SZÓ, nem piktogram. A headless Chromium fontkészletéből hiányzik a legtöbb
+   * szimbólum-glif: a `⌨` (U+2328) mérve `=`-ként renderelődött a felvételen — vagyis a
+   * jelzés, aminek épp a MEGÉRTÉST kellene segítenie, értelmetlen jelet mutatott. Fallback
+   * font nélkül ez a hiba csak a kész videón derül ki.
+   *
+   * ⚠ A meghiúsulás itt NEM hangos, és ez tudatos: a jelzés díszítés, nem bizonyíték. Ha
+   * a cél épp nem mérhető (fókusz nélküli billentyű, eltűnő elem), a lépés menjen tovább —
+   * a reflektornál ez fordítva van, mert ott a hiánya azt jelenti, hogy a néző NEM LÁT
+   * semmit abból, amiről a felirat beszél.
+   */
+  const tett = async (cel, ikon, szoveg, gyuruvel = true) => {
+    if (!szoveg && !ikon) return
+    try {
+      const b = await cel.boundingBox({ timeout: 2000 })
+      if (!b) return
+      const rovid = String(szoveg ?? "").slice(0, 48)
+      await page.evaluate(
+        ([bb, ik, sz, gy]) => window.__demoTett?.(bb, ik, sz, gy),
+        [{ x: b.x, y: b.y, w: b.width, h: b.height }, esc(ikon), esc(rovid), gyuruvel]
+      )
+      await page.waitForTimeout(650)
+    } catch {
+      /* a jelzés elmaradhat — a lépés nem */
+    }
+  }
+  const tettOff = async () => {
+    await page.evaluate(() => window.__demoTett?.(null)).catch(() => {})
+  }
+
   // A kiemelés UTÁN mindig jöjjön világos szakasz: ha a sötétítés folyamatos, a néző
   // hozzászokik, és a képernyő végig sötétnek látszik.
   const reflektorOff = async () => {
@@ -305,7 +372,7 @@ export async function capture({ fk, config, chromium }) {
   const eredmenyek = await futtatLepeseket({
     page,
     lepesek: fk.lepesek,
-    keret: { felvetel: true, feliratoz, reflektor, reflektorOff, fk, config },
+    keret: { felvetel: true, feliratoz, reflektor, reflektorOff, tett, tettOff, fk, config },
   })
 
   await ctx.tracing.stop({ path: path.join(tracesDir, "trace.zip") })
