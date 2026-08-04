@@ -1,0 +1,43 @@
+{
+  "name": "set-demo",
+  "version": "0.1.0",
+  "description": "Funkció-demó felvétel valós webalkalmazásról: forgatókönyv-YAML → GIF + MP4 + önhordó HTML lap, kurzorral, reflektorral és elvárás-kapuval.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "set-demo": "src/cli.mjs"
+  },
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": [
+    "src",
+    "examples",
+    "set-demo.config.example.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@playwright/test": ">=1.40"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0",
+    "playwright-recast": "^0.19.2"
+  },
+  "scripts": {
+    "demo": "node src/cli.mjs"
+  },
+  "keywords": [
+    "playwright",
+    "demo",
+    "screencast",
+    "release-notes",
+    "product-demo",
+    "gif",
+    "walkthrough"
+  ]
+}
