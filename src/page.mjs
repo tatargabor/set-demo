@@ -78,7 +78,12 @@ body{font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;paddin
 h1{font-size:1.5rem;margin:0 0 .25rem}
 .subtitle{color:#71717a;margin:0 0 1.5rem;font-size:.9rem}
 .intro{margin:0 0 1.5rem}
-img,video{max-width:100%;width:100%;border:1px solid #e4e4e7;border-radius:8px;display:block;background:#000}
+/* ⚠ max-height, not width:100%. A PORTRAIT (mobile) recording stretched to the card width
+   becomes absurdly tall: 888×1920 at a 980px card is 2119px high — the viewer scrolls past
+   the video instead of watching it. Capping the height and letting the width follow keeps
+   both orientations right: a landscape recording is still limited by the card width. */
+img,video{max-width:100%;max-height:78vh;width:auto;height:auto;margin:0 auto;
+  border:1px solid #e4e4e7;border-radius:8px;display:block;background:#000}
 ol{list-style:none;padding:0;margin:1.5rem 0 0}
 li{display:flex;gap:.75rem;padding:.6rem 0;border-top:1px solid #e4e4e7}
 .m{font-weight:700;width:1.2rem;flex:none}
