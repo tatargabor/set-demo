@@ -170,18 +170,23 @@ async function vegrehajtLepes({ page, lepes, keret }) {
 }
 
 /** Lépés-sorozat végrehajtása, lépésenkénti eredménnyel. Nem dob — az eredménybe ír. */
-async function futtatLepeseket({ page, lepesek, keret }) {
+async function futtatLepeseket({ page, lepesek, keret, utana }) {
   const eredmenyek = []
   for (const [i, lepes] of (lepesek || []).entries()) {
     const cimke = lepes.cimke || `${i + 1}. lépés`
+    let allapot
     try {
-      const allapot = await vegrehajtLepes({ page, lepes, keret: { ...keret, cimke } })
+      allapot = await vegrehajtLepes({ page, lepes, keret: { ...keret, cimke } })
       eredmenyek.push({ cimke, allapot, magyarazat: lepes.magyarazat })
       console.log(`  ${allapot === "ok" ? "✓" : "·"} ${cimke}`)
     } catch (e) {
-      eredmenyek.push({ cimke, allapot: "bukott", hiba: e.message.split("\n")[0].slice(0, 140) })
+      allapot = "bukott"
+      eredmenyek.push({ cimke, allapot, hiba: e.message.split("\n")[0].slice(0, 140) })
       console.log(`  ✗ ${cimke}\n      ${e.message.split("\n")[0].slice(0, 140)}`)
     }
+    // ⚠ A lelet-gyűjtés a BUKOTT lépés után is fut — épp az a legértékesebb: ott derül ki,
+    // hogy a hiányzó horgony nem létezik-e, vagy csak nem AKKOR látszik.
+    if (utana) await utana(lepes, cimke, allapot)
   }
   return eredmenyek
 }
@@ -369,15 +374,45 @@ export async function capture({ fk, config, chromium }) {
     await page.waitForTimeout(fk.tempo?.levego ?? 900)
   }
 
+  /**
+   * LELET-GYŰJTÉS — amit a felvétel MEGTUD, azt le is teszi.
+   *
+   * A demó az egyetlen eszköz a láncban, ami a valódi felületen, valódi adaton, INTERAKCIÓ
+   * KÖZBEN jár. Az így szerzett tudás máshol nincs meg:
+   *
+   *   • a statikus felület-térkép (atlas) a saját fejlécében kimondja, hogy „regions that
+   *     appear after interaction (detail panes, action bars, search results, menus) are not
+   *     in this map" — a felvétel viszont ÉPP azokban jár;
+   *   • egy elbukott lépés nem csak a demó baja: vagy a horgony nem létezik, vagy létezik,
+   *     de nem AKKOR látszik — és ezt a statikus lista nem tudja megkülönböztetni.
+   *
+   * Ezért lépésenként rögzítjük, milyen `data-testid` volt JELEN a lapon abban a pillanatban.
+   * A különbség két lépés között = az interakció után megjelenő felület, vagyis pontosan a
+   * statikus térkép vakfoltja.
+   */
+  const leletek = []
+  const lathatoHorgonyok = async () => {
+    try {
+      return await page.evaluate(() =>
+        [...document.querySelectorAll("[data-testid]")].map((e) => e.getAttribute("data-testid"))
+      )
+    } catch {
+      return []
+    }
+  }
+
   const eredmenyek = await futtatLepeseket({
     page,
     lepesek: fk.lepesek,
     keret: { felvetel: true, feliratoz, reflektor, reflektorOff, tett, tettOff, fk, config },
+    utana: async (lepes, cimke, allapot) => {
+      leletek.push({ cimke, allapot, horgonyok: await lathatoHorgonyok() })
+    },
   })
 
   await ctx.tracing.stop({ path: path.join(tracesDir, "trace.zip") })
   await ctx.close()
   await browser.close()
 
-  return { eredmenyek, munkaDir, tracesDir: path.join(munkaDir, "test-results"), nezet, mobil }
+  return { eredmenyek, leletek, munkaDir, tracesDir: path.join(munkaDir, "test-results"), nezet, mobil }
 }

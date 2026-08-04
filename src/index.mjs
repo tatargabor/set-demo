@@ -51,7 +51,7 @@ export async function runDemo({ config, scenarioPath, chromium }) {
   console.log(`Forgatókönyv: ${fk.cim}`)
   console.log(`Cél: ${config.baseUrl}\n`)
 
-  const { eredmenyek, munkaDir, tracesDir, nezet, mobil } = await capture({ fk, config, chromium })
+  const { eredmenyek, leletek, munkaDir, tracesDir, nezet, mobil } = await capture({ fk, config, chromium })
 
   const mp4 = path.join(out, `${nev}.mp4`)
   await renderVideo({ tracesDir, mp4Path: mp4, nezet, mobil, tempo: fk.tempo, maxOldal: fk.maxOldal })
@@ -68,6 +68,35 @@ export async function runDemo({ config, scenarioPath, chromium }) {
   console.log(`\n  GIF  ${kb(gif)}  ${gif}`)
   console.log(`  MP4  ${kb(mp4)}  ${mp4}`)
   console.log(`  lap  ${kb(lap)}  ${lap}`)
+
+  /**
+   * LELETEK — amit a felvétel megtudott, és amit máshol NEM lehet megtudni.
+   *
+   * A demó az egyetlen eszköz, ami a valós felületen, INTERAKCIÓ KÖZBEN jár. A statikus
+   * felület-térkép (atlas) a saját fejlécében mondja ki, hogy amit interakció hoz elő
+   * (részlet-panelek, akció-sávok, keresési találatok, menük), az nincs benne. A felvétel
+   * viszont ÉPP ott jár — tehát a leletei annak a térképnek a vakfoltját mérik.
+   *
+   * Két dolgot teszünk le, mindkettőt gépi alakban:
+   *   • `ujHorgonyok` — ami CSAK interakció után jelent meg (a statikus térkép hiánya);
+   *   • `bukott` — a lépés, ami nem ment: vagy a horgony nem létezik, vagy létezik, de nem
+   *     AKKOR látszik. A kettőt a statikus lista nem tudja megkülönböztetni, a felvétel igen.
+   *
+   * ⚠ Ez ADAT, nem ítélet. Hogy a hiány a térképé, a specé vagy a felületé, azt ember dönti el.
+   */
+  const eddigLatott = new Set()
+  const leletFajl = {
+    forgatokonyv: nev,
+    cim: fk.cim,
+    kornyezet: config.kornyezet,
+    lepesek: (leletek ?? []).map((l) => {
+      const uj = (l.horgonyok ?? []).filter((h) => !eddigLatott.has(h))
+      for (const h of l.horgonyok ?? []) eddigLatott.add(h)
+      return { cimke: l.cimke, allapot: l.allapot, ujHorgonyok: uj }
+    }),
+    osszesHorgony: [...eddigLatott].sort(),
+  }
+  fs.writeFileSync(path.join(out, "leletek.json"), JSON.stringify(leletFajl, null, 2))
 
   const bukott = eredmenyek.filter((e) => e.allapot === "bukott")
   if (bukott.length) {
