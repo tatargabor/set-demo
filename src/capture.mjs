@@ -1,258 +1,261 @@
-// A felvétel: forgatókönyv-lépések végrehajtása valós felületen, trace-szel.
+// The recording: scenario steps executed against a real UI, with a Playwright trace.
 //
-// ⚠ A forgatókönyv EGYBEN VÉGIGPRÓBA: minden lépéshez `elvaras` tartozhat, és ha egy nem
-// teljesül, a futás HANGOSAN elhasal — nem készül szép videó törött funkcióról.
+// ⚠ A scenario IS a walkthrough test: every step may carry an `expect`, and if one is not
+// met the run fails LOUDLY — no pretty video of a broken feature.
 //
-// ⚠ A projekt-specifikus rész NEM itt van: a belépés, a base URL, a kimeneti könyvtár és a
-// környezet-előkészítés a hívó `config`-jából jön. Lásd `set-demo.config.example.mjs`.
+// ⚠ The project-specific part is NOT here: base URL, login, output directory and environment
+// preparation all come from the caller's `config`. See `set-demo.config.example.mjs`.
 
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import { overlayScript, escapeHtml as esc } from "./overlay.mjs"
 
-const MOBIL_NEZET = { width: 390, height: 844 }
-const ASZTALI_NEZET = { width: 1280, height: 800 }
+const MOBILE_VIEWPORT = { width: 390, height: 844 }
+const DESKTOP_VIEWPORT = { width: 1280, height: 800 }
 
 /**
- * Dátum-helyettesítés a forgatókönyvben: `{{ma}}` és `{{ma+3}}` / `{{ma-1}}` → ISO nap.
+ * Date substitution in scenarios: `{{today}}` and `{{today+3}}` / `{{today-1}}` → ISO day.
+ * The Hungarian `{{ma}}` form is still accepted (see `scenario.mjs` for why aliases exist).
  *
- * Miért kell: a demónak gyakran MAI dátumot kell beírnia (ütemezés, határidő), a YAML pedig
- * nem tud számolni. Beégetett dátummal a forgatókönyv másnap némán elromlik — a felvétel
- * elkészülne, csak épp üres képernyőt mutatna.
+ * Why this is needed: a demo often has to type TODAY's date (scheduling, deadlines) and YAML
+ * cannot compute. With a hardcoded date the scenario breaks SILENTLY the next day — the
+ * recording still completes, it just shows an empty screen.
  */
-export function feloldDatum(ertek, most = new Date()) {
-  if (typeof ertek !== "string") return ertek
-  return ertek.replace(/\{\{\s*ma\s*([+-]\s*\d+)?\s*\}\}/g, (_, eltolas) => {
-    const d = new Date(most)
-    if (eltolas) d.setDate(d.getDate() + Number(eltolas.replace(/\s+/g, "")))
+export function resolveDate(value, now = new Date()) {
+  if (typeof value !== "string") return value
+  return value.replace(/\{\{\s*(?:today|ma)\s*([+-]\s*\d+)?\s*\}\}/g, (_, offset) => {
+    const d = new Date(now)
+    if (offset) d.setDate(d.getDate() + Number(offset.replace(/\s+/g, "")))
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
   })
 }
 
 /**
- * EGY lépés végrehajtása. Ugyanaz a szótár szolgálja ki a FELVÉTELT és az ELŐKÉSZÍTÉST —
- * szándékosan egyetlen implementációban.
+ * Execute ONE step. The same vocabulary serves both the RECORDING and the SETUP phase —
+ * deliberately, in a single implementation.
  *
- * ⚠ Két párhuzamos, kézzel karbantartott lépés-értelmező előbb-utóbb szétcsúszik, és a
- * szétcsúszás iránya a rossz: az előkészítés csendben mást csinálna, mint amit a
- * forgatókönyv írója a felvételi lépésekből megtanult. A `keret.felvetel` kapcsolja ki a
- * feliratot, a reflektort és a nézői szüneteket — a CSELEKVÉS azonos marad.
+ * ⚠ Two hand-maintained step interpreters drift apart sooner or later, and the drift goes the
+ * wrong way: setup would quietly do something other than what the scenario author learned
+ * from the recording steps. `ctx.recording` switches off captions, spotlight and viewer
+ * pauses — the ACTIONS stay identical.
  */
-async function vegrehajtLepes({ page, lepes, keret }) {
-  const { felvetel, feliratoz, reflektor, reflektorOff, tett, tettOff, fk, config, cimke } = keret
+async function executeStep({ page, step, ctx }) {
+  const { recording, caption, spotlight, spotlightOff, action, actionOff, scenario, config, label } = ctx
 
-  if (lepes.megnyit) {
-    await page.goto(`${config.baseUrl}${lepes.megnyit}`, { waitUntil: "networkidle", timeout: 45000 })
+  if (step.goto) {
+    await page.goto(`${config.baseUrl}${step.goto}`, { waitUntil: "networkidle", timeout: 45000 })
   }
-  // A felirat az akció ELŐTT és UTÁN is kimegy: a kattintás navigációt válthat ki, ami
-  // az injektált sávot a DOM-mal együtt elviszi.
-  if (felvetel) await feliratoz(cimke, lepes.magyarazat)
+  // The caption is pushed both BEFORE and AFTER the action: a click may trigger navigation,
+  // which takes the injected bar down with the DOM.
+  if (recording) await caption(label, step.note)
 
-  // ⚠ A SORREND: buborék a kattintás ELŐTT (hova megyünk), fókusz a kattintás UTÁN (mit
-  // nézzen az eredményen). Fordítva a fókusz olyan elemre várna, amit épp a kattintás
-  // hoz létre.
-  const buborekCel = felvetel && lepes.buborek ? lepes.kattint || lepes.gorget?.hol : null
-  if (buborekCel && (await reflektor(buborekCel, lepes.buborek))) {
-    await page.waitForTimeout(lepes.buborekIdo ?? 1900)
-  }
-
-  if (lepes.kattint) {
-    const cel = page.locator(lepes.kattint).first()
-    // A hullámot a recast rajzolja a trace-ből (pontos időzítéssel) — mi a CÍMKÉT tesszük
-    // mellé, gyűrű nélkül: két egymásra rajzolt kör zavaros lenne.
-    await tett(cel, "kattint", lepes.kattintCimke, false)
-    await cel.click()
-    await tettOff()
+  // ⚠ ORDER MATTERS: bubble BEFORE the click (where are we going), spotlight AFTER it (what
+  // to look at in the result). Reversed, the spotlight would wait for an element that the
+  // click itself is about to create.
+  const bubbleTarget = recording && step.bubble ? step.click || step.scroll?.on : null
+  if (bubbleTarget && (await spotlight(bubbleTarget, step.bubble))) {
+    await page.waitForTimeout(step.bubbleHold ?? 1900)
   }
 
-  // Kritérium szerinti választás listából. Enélkül a demó „az első sort" mutatja, tehát
-  // MINDEN FUTÁS MÁST — és a magyarázat elcsúszhat a képtől. A választott példányt
-  // KIÍRJUK: egy néma választás miatt a következő futás eltérése megmagyarázhatatlan.
-  if (lepes.valaszt) {
-    let jeloltek = page.locator(lepes.valaszt.lista)
-    for (const sz of lepes.valaszt.tartalmaz ?? []) jeloltek = jeloltek.filter({ hasText: sz })
-    for (const sz of lepes.valaszt.kizar ?? []) jeloltek = jeloltek.filter({ hasNotText: sz })
-    const db = await jeloltek.count()
-    if (db === 0) {
+  if (step.click) {
+    const target = page.locator(step.click).first()
+    // The ripple is drawn by recast from the trace (with exact timing) — we only add the
+    // LABEL next to it, without a ring: two circles drawn on top of each other would confuse.
+    await action(target, "click", step.clickLabel, false)
+    await target.click()
+    await actionOff()
+  }
+
+  // Criterion-based choice from a list. Without it the demo shows "the first row", i.e. A
+  // DIFFERENT ONE EVERY RUN — and the explanation may drift away from the picture. The chosen
+  // instance is PRINTED: after a silent choice, a difference in the next run is inexplicable.
+  if (step.pick) {
+    let candidates = page.locator(step.pick.list)
+    for (const t of step.pick.contains ?? []) candidates = candidates.filter({ hasText: t })
+    for (const t of step.pick.excludes ?? []) candidates = candidates.filter({ hasNotText: t })
+    const count = await candidates.count()
+    if (count === 0) {
       throw new Error(
-        `Nincs a kritériumnak megfelelő elem: ${JSON.stringify(lepes.valaszt)} — ` +
-          `a demó nem mutathat tetszőleges példányt helyette`
+        `No element matches the criterion: ${JSON.stringify(step.pick)} — ` +
+          `the demo must not show an arbitrary instance instead`
       )
     }
-    const valasztott = jeloltek.first()
-    const felirata = ((await valasztott.innerText()) || "").split("\n").slice(0, 2).join(" · ").slice(0, 90)
-    console.log(`      választva (${db} jelöltből): ${felirata}`)
+    const chosen = candidates.first()
+    const text = ((await chosen.innerText()) || "").split("\n").slice(0, 2).join(" · ").slice(0, 90)
+    console.log(`      picked (of ${count}): ${text}`)
 
-    // ⚠ A KIVÁLASZTÁS és a KATTINTÁS gyakran két KÜLÖNBÖZŐ elem: a kritérium a kártyán/soron
-    // értelmes („ne olyan fuvart mutass, aminek 0 főterméke van"), a cselekvés viszont egy
-    // gombon belül. A `benne:` nélkül a kritériumot a gombra kellene tenni — ahol a
-    // megkülönböztető szöveg nincs is ott —, tehát a demó vagy rossz példányt mutat, vagy
-    // a szerző beéget egy konkrét azonosítót.
-    const cel = lepes.valaszt.benne ? valasztott.locator(lepes.valaszt.benne).first() : valasztott
-    if (lepes.valaszt.benne && (await cel.count()) === 0) {
+    // ⚠ The CHOICE and the CLICK are often two DIFFERENT elements: the criterion makes sense
+    // on the card/row ("do not show a run with 0 main items"), while the action lives inside
+    // a button. Without `within`, the criterion would have to go on the button — where the
+    // distinguishing text is not present — so the demo either shows the wrong instance, or
+    // the author hardcodes a specific id.
+    const target = step.pick.within ? chosen.locator(step.pick.within).first() : chosen
+    if (step.pick.within && (await target.count()) === 0) {
       throw new Error(
-        `A választott elemben nincs "${lepes.valaszt.benne}" — a kritérium jó sort talált, ` +
-          `de a cselekvés célja hiányzik belőle`
+        `The chosen element contains no "${step.pick.within}" — the criterion found the right ` +
+          `row, but the target of the action is missing from it`
       )
     }
-    await tett(cel, "kattint", lepes.kattintCimke ?? ((await cel.innerText().catch(() => "")) || "").trim().split("\n")[0], false)
-    await cel.click()
-    await tettOff()
+    await action(target, "click", step.clickLabel ?? ((await target.innerText().catch(() => "")) || "").trim().split("\n")[0], false)
+    await target.click()
+    await actionOff()
   }
 
-  if (buborekCel && !lepes.fokusz) await reflektorOff()
+  if (bubbleTarget && !step.spotlight) await spotlightOff()
 
-  if (felvetel && lepes.fokusz) {
-    if (lepes.kattint) await page.waitForTimeout(lepes.fokusz.utana ?? 900)
-    if (await reflektor(lepes.fokusz.hol, lepes.fokusz.szoveg)) {
-      await page.waitForTimeout(lepes.fokusz.ido ?? 1800)
+  if (recording && step.spotlight) {
+    if (step.click) await page.waitForTimeout(step.spotlight.after ?? 900)
+    if (await spotlight(step.spotlight.on, step.spotlight.text)) {
+      await page.waitForTimeout(step.spotlight.hold ?? 1800)
     }
   }
 
-  if (lepes.kitolt) {
-    // ⚠ A beírás a felvételen NYOMTALAN: a mező értéke egyszerre megjelenik, mintha magától
-    // történt volna. A gyűrű + a beírt érték mutatja meg, hogy MI történik — a `clickEffect`
-    // ide nem ér el, mert az csak valódi egérkattintást lát a trace-ben.
-    const mezo = page.locator(lepes.kitolt.mezo).first()
-    const ertek = feloldDatum(lepes.kitolt.ertek)
-    await tett(mezo, "beír", lepes.kitolt.cimke ?? ertek)
-    await page.fill(lepes.kitolt.mezo, ertek)
-    if (felvetel) await page.waitForTimeout(lepes.kitolt.ido ?? 900)
-    await tettOff()
+  if (step.fill) {
+    // ⚠ Typing leaves NO TRACE on the recording: the field's value simply appears, as if it
+    // had happened by itself. The ring + the typed value show WHAT is happening — `clickEffect`
+    // cannot reach here, because it only sees real mouse clicks in the trace.
+    const field = page.locator(step.fill.field).first()
+    const value = resolveDate(step.fill.value)
+    await action(field, "type", step.fill.label ?? value)
+    await page.fill(step.fill.field, value)
+    if (recording) await page.waitForTimeout(step.fill.hold ?? 900)
+    await actionOff()
   }
 
-  if (lepes.billentyu) {
-    // A billentyű a fókuszált elemen hat — a jelzés is oda kerül. Ha nincs fókusz (vagy nem
-    // mérhető), a címke akkor is kimegy: a néma billentyű a legrosszabb, mert a képernyő
-    // magától változik meg.
-    await tett(page.locator(":focus").first(), "gomb", lepes.billentyu)
-    await page.keyboard.press(lepes.billentyu)
-    if (felvetel) await page.waitForTimeout(700)
-    await tettOff()
+  if (step.press) {
+    // A key press acts on the focused element — so does the marker. If there is no focus (or
+    // it is not measurable), the label still goes out: a silent key press is the worst case,
+    // because the screen changes on its own.
+    await action(page.locator(":focus").first(), "key", step.press)
+    await page.keyboard.press(step.press)
+    if (recording) await page.waitForTimeout(700)
+    await actionOff()
   }
 
-  if (lepes.gorget) {
-    // Az egeret az elem fölé visszük, hogy a BELSŐ panel görögjön, ne az oldal.
-    const cel = page.locator(lepes.gorget.hol).first()
-    await cel.waitFor({ state: "visible", timeout: 10000 })
-    await tett(cel, "görget", lepes.gorget.cimke ?? "", false)
-    await cel.hover()
-    // Apró lépés + szünet: a görgetés a nézőnek KÖVETHETŐ legyen, ne ugorjon.
-    const teljes = lepes.gorget.mennyi ?? 400
-    const koz = lepes.gorget.lepeskoz ?? 45
-    const szunet = lepes.gorget.szunet ?? 170
-    const lepesszam = Math.max(1, Math.round(Math.abs(teljes) / koz))
-    for (let k = 0; k < lepesszam; k++) {
-      await page.mouse.wheel(0, teljes / lepesszam)
-      await page.waitForTimeout(szunet)
+  if (step.scroll) {
+    // Move the mouse over the element so the INNER panel scrolls, not the page.
+    const target = page.locator(step.scroll.on).first()
+    await target.waitFor({ state: "visible", timeout: 10000 })
+    await action(target, "scroll", step.scroll.label ?? "", false)
+    await target.hover()
+    // Small steps + pauses: the scroll must be FOLLOWABLE for the viewer, not a jump.
+    const total = step.scroll.by ?? 400
+    const stride = step.scroll.step ?? 45
+    const pause = step.scroll.pause ?? 170
+    const ticks = Math.max(1, Math.round(Math.abs(total) / stride))
+    for (let i = 0; i < ticks; i++) {
+      await page.mouse.wheel(0, total / ticks)
+      await page.waitForTimeout(pause)
     }
-    await tettOff()
+    await actionOff()
   }
 
-  if (felvetel) {
-    await feliratoz(cimke, lepes.magyarazat)
-    await page.waitForTimeout(lepes.varakozas ?? 2500)
-    if (lepes.fokusz) await reflektorOff()
-  } else if (lepes.varakozas) {
-    // Előkészítésben csak akkor várunk, ha a lépés KIFEJEZETTEN kéri (mentés utáni
-    // újratöltés) — a nézői tempó ott tiszta veszteség.
-    await page.waitForTimeout(Math.min(lepes.varakozas, 3000))
+  if (recording) {
+    await caption(label, step.note)
+    await page.waitForTimeout(step.wait ?? 2500)
+    if (step.spotlight) await spotlightOff()
+  } else if (step.wait) {
+    // In setup we only wait when the step EXPLICITLY asks for it (a reload after saving) —
+    // viewer pacing is pure waste there.
+    await page.waitForTimeout(Math.min(step.wait, 3000))
   }
 
-  // Az ELVÁRÁS teszi a demót bizonyítékká. Hiánya megengedett (pl. tiszta navigáció),
-  // de akkor az a lépés nem bizonyít semmit — a riport ezt külön jelzi.
-  if (lepes.elvaras) {
-    await page.locator(lepes.elvaras).first().waitFor({ state: "visible", timeout: 10000 })
+  // The EXPECTATION is what makes the demo evidence. Omitting it is allowed (e.g. plain
+  // navigation), but then that step proves nothing — the report flags it separately.
+  if (step.expect) {
+    await page.locator(step.expect).first().waitFor({ state: "visible", timeout: 10000 })
     return "ok"
   }
-  return "nincs-elvaras"
+  return "no-expectation"
 }
 
-/** Lépés-sorozat végrehajtása, lépésenkénti eredménnyel. Nem dob — az eredménybe ír. */
-async function futtatLepeseket({ page, lepesek, keret, utana }) {
-  const eredmenyek = []
-  for (const [i, lepes] of (lepesek || []).entries()) {
-    const cimke = lepes.cimke || `${i + 1}. lépés`
-    let allapot
+/** Run a sequence of steps, with a per-step result. Never throws — writes into the result. */
+async function runSteps({ page, steps, ctx, after }) {
+  const results = []
+  for (const [i, step] of (steps || []).entries()) {
+    const label = step.label || `step ${i + 1}`
+    let status
     try {
-      allapot = await vegrehajtLepes({ page, lepes, keret: { ...keret, cimke } })
-      eredmenyek.push({ cimke, allapot, magyarazat: lepes.magyarazat })
-      console.log(`  ${allapot === "ok" ? "✓" : "·"} ${cimke}`)
+      status = await executeStep({ page, step, ctx: { ...ctx, label } })
+      results.push({ label, status, note: step.note })
+      console.log(`  ${status === "ok" ? "✓" : "·"} ${label}`)
     } catch (e) {
-      allapot = "bukott"
-      eredmenyek.push({ cimke, allapot, hiba: e.message.split("\n")[0].slice(0, 140) })
-      console.log(`  ✗ ${cimke}\n      ${e.message.split("\n")[0].slice(0, 140)}`)
+      status = "failed"
+      results.push({ label, status, error: e.message.split("\n")[0].slice(0, 140) })
+      console.log(`  ✗ ${label}\n      ${e.message.split("\n")[0].slice(0, 140)}`)
     }
-    // ⚠ A lelet-gyűjtés a BUKOTT lépés után is fut — épp az a legértékesebb: ott derül ki,
-    // hogy a hiányzó horgony nem létezik-e, vagy csak nem AKKOR látszik.
-    if (utana) await utana(lepes, cimke, allapot)
+    // ⚠ Findings are collected AFTER a FAILED step too — that is the most valuable moment:
+    // it is where you learn whether the missing anchor does not exist, or is just not visible
+    // at that point.
+    if (after) await after(step, label, status)
   }
-  return eredmenyek
+  return results
 }
 
 /**
- * ELŐKÉSZÍTÉS — a demó ELŐÁLLÍTJA, amit mutatni fog.
+ * SETUP — the demo PRODUCES what it is about to show.
  *
- * Miért külön fázis, és miért NEM kerül a felvételre:
+ * Why it is a separate phase, and why it does NOT end up on the recording:
  *
- * 1. **Van funkció, amihez elvileg nincs éles adat.** Mérve 2026-08-04: az éles rendszer 310
- *    rendeléséből NULLA ütemezett fuvar, nulla sofőrhöz rendelés, nulla leigazolás, és
- *    NULLA sofőr-jogú felhasználó — a kiszállítás-lánc egy nappal a kiadása után még
- *    elérhetetlen. Ilyenkor a „válasszunk egy jó példányt" stratégia elvileg sem működik.
- * 2. **Az előállítás gyakran MÁS nézetben történik, mint a bemutatás.** A fuvart az operátor
- *    ütemezi asztali képernyőn; a demó a sofőr TELEFONJÁT mutatja. Egy felvételbe a kettő
- *    nem fér: a viewport a felvétel tulajdonsága.
- * 3. **Az előkészítés nem a történet része.** A néző a funkciót akarja látni, nem azt, hogy
- *    a demó hogyan gründolta össze magának az adatot.
+ * 1. **A feature may have no live data at all.** Measured on a production ERP: of 310 orders,
+ *    ZERO scheduled runs, zero driver assignments, zero confirmations and ZERO users with the
+ *    driver capability — one day after release the delivery chain was unreachable. "Pick a
+ *    good instance" cannot work in principle there.
+ * 2. **Production often happens in a DIFFERENT viewport than presentation.** An operator
+ *    schedules on a desktop screen; the demo shows the driver's PHONE. The two do not fit in
+ *    one recording: the viewport is a property of the recording.
+ * 3. **Setup is not part of the story.** The viewer wants the feature, not how the demo
+ *    scraped together its own data.
  *
- * ⚠ Az előkészítés bukása ABORTÁL. Enélkül a felvétel lefutna a hiányzó adaton, és egy ÜRES
- * képernyőről készülne szép videó — ez a néma kudarc osztálya: kívülről pontosan úgy néz ki,
- * mint a siker.
+ * ⚠ A failing setup ABORTS. Otherwise the recording would run against missing data and produce
+ * a nice video of an EMPTY screen — the silent-failure class: from the outside it looks exactly
+ * like success.
  */
-async function elokeszit({ fk, config, chromium, browser }) {
-  const nezet = fk.elokeszitesNezet || ASZTALI_NEZET
-  const ctx = await browser.newContext({ viewport: nezet, locale: config.locale || "hu-HU" })
-  if (config.prepare) await config.prepare(ctx, { mobil: false, nezet })
+async function runSetup({ scenario, config, browser }) {
+  const viewport = scenario.setupViewport || DESKTOP_VIEWPORT
+  const ctx = await browser.newContext({ viewport, locale: config.locale || "en-US" })
+  if (config.prepare) await config.prepare(ctx, { mobile: false, viewport })
   const page = await ctx.newPage()
   if (config.login) await config.login(ctx, { baseUrl: config.baseUrl, page })
 
-  console.log("  Előkészítés (nem kerül a felvételre):")
-  const eredmenyek = await futtatLepeseket({
+  console.log("  Setup (not recorded):")
+  const results = await runSteps({
     page,
-    lepesek: fk.elokeszites,
-    // Az előkészítés nem kerül a felvételre, tehát a vizuális jelzések itt no-opok — de a
-    // FÜGGVÉNYEKNEK létezniük kell, különben a közös lépés-értelmező elhasalna rajtuk.
-    keret: { felvetel: false, tett: async () => {}, tettOff: async () => {}, fk, config },
+    steps: scenario.setup,
+    // Setup is not recorded, so the visual markers are no-ops here — but the FUNCTIONS must
+    // exist, otherwise the shared step interpreter would fail on them.
+    ctx: { recording: false, action: async () => {}, actionOff: async () => {}, scenario, config },
   })
   await ctx.close()
 
-  const bukott = eredmenyek.filter((e) => e.allapot === "bukott")
-  if (bukott.length) {
+  const failed = results.filter((r) => r.status === "failed")
+  if (failed.length) {
     throw new Error(
-      `Az előkészítés ${bukott.length} lépése elhasalt (${bukott.map((b) => b.cimke).join(", ")}) — ` +
-        `a bemutatandó adat NEM áll elő, ezért a felvétel üres képernyőt rögzítene. Nem indítom el.`
+      `${failed.length} setup step(s) failed (${failed.map((f) => f.label).join(", ")}) — ` +
+        `the data to be shown does NOT come into existence, so the recording would capture an ` +
+        `empty screen. Not starting it.`
     )
   }
   console.log("")
-  return eredmenyek
+  return results
 }
 
-export async function capture({ fk, config, chromium }) {
-  // `nezet: mobil` — a telefonra készült képernyőket asztali viewporton felvenni
-  // félrevezető: olyan elrendezést mutatna, amit a felhasználó soha nem lát.
-  const mobil = fk.nezet === "mobil" || fk.mobil === true
-  const nezet = mobil ? MOBIL_NEZET : fk.nezet || ASZTALI_NEZET
+export async function capture({ scenario, config, chromium }) {
+  // `viewport: mobile` — recording a phone screen in a desktop viewport is misleading: it
+  // would show a layout the user never sees.
+  const mobile = scenario.viewport === "mobile" || scenario.mobile === true
+  const viewport = mobile ? MOBILE_VIEWPORT : scenario.viewport || DESKTOP_VIEWPORT
 
-  const munkaDir = fs.mkdtempSync(path.join(os.tmpdir(), "set-demo-"))
-  const tracesDir = path.join(munkaDir, "test-results", "demo")
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "set-demo-"))
+  const tracesDir = path.join(workDir, "test-results", "demo")
   fs.mkdirSync(tracesDir, { recursive: true })
 
   const browser = await chromium.launch({ headless: true })
 
-  if (fk.elokeszites?.length) {
+  if (scenario.setup?.length) {
     try {
-      await elokeszit({ fk, config, chromium, browser })
+      await runSetup({ scenario, config, browser })
     } catch (e) {
       await browser.close()
       throw e
@@ -260,138 +263,138 @@ export async function capture({ fk, config, chromium }) {
   }
 
   const ctx = await browser.newContext({
-    viewport: nezet,
-    locale: config.locale || "hu-HU",
-    // Érintés-emuláció: enélkül a felület az egeres ágon fut (hover-állapotok, más
-    // breakpoint), és a felvétel nem azt mutatja, amit a felhasználó a telefonján lát.
-    isMobile: mobil,
-    hasTouch: mobil,
-    deviceScaleFactor: mobil ? 3 : 1,
-    recordVideo: { dir: tracesDir, size: nezet },
+    viewport,
+    locale: config.locale || "en-US",
+    // Touch emulation: without it the UI runs on the mouse branch (hover states, a different
+    // breakpoint) and the recording does not show what the user sees on their phone.
+    isMobile: mobile,
+    hasTouch: mobile,
+    deviceScaleFactor: mobile ? 3 : 1,
+    recordVideo: { dir: tracesDir, size: viewport },
   })
 
-  if (fk.felirat !== false) {
+  if (scenario.captions !== false) {
     await ctx.addInitScript(
       overlayScript({
-        mobil,
-        balOffset: fk.vago?.x ?? 0,
-        jobbOffset: fk.vago ? Math.max(0, nezet.width - fk.vago.x - fk.vago.w) : 0,
+        mobile,
+        leftOffset: scenario.crop?.x ?? 0,
+        rightOffset: scenario.crop ? Math.max(0, viewport.width - scenario.crop.x - scenario.crop.w) : 0,
       })
     )
   }
 
-  // Projekt-specifikus környezet-előkészítés (initScript-ek, localStorage, feature flag).
-  // Tipikus haszna: olyan vizuális zaj kivétele, ami nem a bemutatott funkcióról szól.
-  // ⚠ Ha ilyet használsz, az ELREJTÉS, nem javítás — a mögötte lévő hibát vedd fel külön.
-  if (config.prepare) await config.prepare(ctx, { mobil, nezet })
+  // Project-specific environment preparation (init scripts, localStorage, feature flags).
+  // Typical use: removing visual noise that is not about the feature being shown.
+  // ⚠ If you use this, it is HIDING, not fixing — file the underlying bug separately.
+  if (config.prepare) await config.prepare(ctx, { mobile, viewport })
 
   await ctx.tracing.start({ screenshots: true, snapshots: true, sources: false })
   const page = await ctx.newPage()
 
   if (config.login) await config.login(ctx, { baseUrl: config.baseUrl, page })
 
-  const feliratoz = async (cim, szoveg) => {
-    if (fk.felirat === false) return
-    await page.evaluate(([c, sz]) => window.__demoFelirat?.(c, sz), [esc(cim), esc(szoveg)]).catch(() => {})
+  const caption = async (title, text) => {
+    if (scenario.captions === false) return
+    await page.evaluate(([t, x]) => window.__demoCaption?.(t, x), [esc(title), esc(text)]).catch(() => {})
   }
 
-  // Reflektor: keret a területre + háttér-sötétítés + rövid szöveg.
-  async function reflektor(sel, szoveg) {
-    const cel = page.locator(sel).first()
-    await cel.waitFor({ state: "visible", timeout: 10000 })
-    // ⚠ Ha a kiemelendő terület a képen kívül van, ODAGÖRGETÜNK — enélkül a keret a
-    // viewporton kívülre esik, és a felvételen NEM LÁTSZIK SEMMI. Alattomos, mert a
-    // Playwright `hover()` magától görget: ugyanaz a selector a görgetés-ágon működik,
-    // a kiemelés-ágon némán nem.
-    await cel.scrollIntoViewIfNeeded().catch(() => {})
+  // Spotlight: a frame around the area + a dimmed background + a short line of text.
+  async function spotlight(sel, text) {
+    const target = page.locator(sel).first()
+    await target.waitFor({ state: "visible", timeout: 10000 })
+    // ⚠ If the area to highlight is off-screen, WE SCROLL TO IT — otherwise the frame lands
+    // outside the viewport and NOTHING IS VISIBLE on the recording. This is insidious, because
+    // Playwright's `hover()` scrolls by itself: the same selector works on the scroll path and
+    // silently does not on the highlight path.
+    await target.scrollIntoViewIfNeeded().catch(() => {})
     await page.waitForTimeout(350)
-    const b = await cel.boundingBox()
+    const b = await target.boundingBox()
 
-    // ⚠ A néma kudarc a legrosszabb kimenet: a felvétel elkészül, kiemelés nélkül, és csak
-    // a kész videón derül ki. Ezért minden meghiúsulás HANGOS.
+    // ⚠ Silent failure is the worst outcome: the recording completes without the highlight,
+    // and you only find out from the finished video. So every miss is LOUD.
     if (!b) {
-      console.log(`      ⚠ nincs kiemelés: "${sel}" nem ad befoglaló keretet`)
+      console.log(`      ⚠ no highlight: "${sel}" has no bounding box`)
       return false
     }
     if (b.width < 8 || b.height < 8) {
-      console.log(`      ⚠ nincs kiemelés: "${sel}" mérete ${Math.round(b.width)}×${Math.round(b.height)} px`)
+      console.log(`      ⚠ no highlight: "${sel}" is ${Math.round(b.width)}×${Math.round(b.height)} px`)
       return false
     }
-    const v = { x: Math.max(0, b.x), y: Math.max(0, b.y) }
-    const w = Math.min(b.x + b.width, nezet.width) - v.x
-    const h = Math.min(b.y + b.height, nezet.height) - v.y
+    const p = { x: Math.max(0, b.x), y: Math.max(0, b.y) }
+    const w = Math.min(b.x + b.width, viewport.width) - p.x
+    const h = Math.min(b.y + b.height, viewport.height) - p.y
     if (w < 8 || h < 8) {
-      console.log(`      ⚠ nincs kiemelés: "${sel}" a látható területen kívül van`)
+      console.log(`      ⚠ no highlight: "${sel}" is outside the visible area`)
       return false
     }
-    if (h > nezet.height * 0.94 && w > nezet.width * 0.94) {
-      console.log(`      ⚠ a kiemelés majdnem a teljes képernyő ("${sel}") — szűkebb selectort érdemes`)
+    if (h > viewport.height * 0.94 && w > viewport.width * 0.94) {
+      console.log(`      ⚠ the highlight covers almost the whole screen ("${sel}") — use a narrower selector`)
     }
-    await page.evaluate(([bb, sz]) => window.__demoBuborek?.(bb, sz), [{ x: v.x, y: v.y, w, h }, esc(szoveg)])
-    console.log(`      kiemelve: ${Math.round(w)}×${Math.round(h)} px @${Math.round(v.x)},${Math.round(v.y)}`)
+    await page.evaluate(([bb, t]) => window.__demoSpotlight?.(bb, t), [{ x: p.x, y: p.y, w, h }, esc(text)])
+    console.log(`      highlighted: ${Math.round(w)}×${Math.round(h)} px @${Math.round(p.x)},${Math.round(p.y)}`)
     return true
   }
 
   /**
-   * TETT-jelzés: gyűrű + címke arról, hogy MIT csinálunk — nem csak hol.
+   * ACTION marker: a ring + a label saying WHAT we are doing — not just where.
    *
-   * A `gyuruvel: false` a kattintásra való: ott a hullámot a `clickEffect` rajzolja a
-   * trace-ből, pontos időzítéssel, és két egymásra rajzolt kör csak zavarna.
+   * `withRing: false` is for clicks: there the ripple is drawn by `clickEffect` from the
+   * trace, with exact timing, and two circles on top of each other would only confuse.
    *
-   * ⚠ Az `ikon` SZÓ, nem piktogram. A headless Chromium fontkészletéből hiányzik a legtöbb
-   * szimbólum-glif: a `⌨` (U+2328) mérve `=`-ként renderelődött a felvételen — vagyis a
-   * jelzés, aminek épp a MEGÉRTÉST kellene segítenie, értelmetlen jelet mutatott. Fallback
-   * font nélkül ez a hiba csak a kész videón derül ki.
+   * ⚠ The `kind` is a WORD, not a pictogram. Headless Chromium's font set lacks most symbol
+   * glyphs: `⌨` (U+2328) was measured rendering as `=` on the recording — i.e. the marker whose
+   * whole job is to aid UNDERSTANDING showed a meaningless character. Without a fallback font
+   * this only surfaces on the finished video.
    *
-   * ⚠ A meghiúsulás itt NEM hangos, és ez tudatos: a jelzés díszítés, nem bizonyíték. Ha
-   * a cél épp nem mérhető (fókusz nélküli billentyű, eltűnő elem), a lépés menjen tovább —
-   * a reflektornál ez fordítva van, mert ott a hiánya azt jelenti, hogy a néző NEM LÁT
-   * semmit abból, amiről a felirat beszél.
+   * ⚠ A miss here is NOT loud, and that is deliberate: the marker is decoration, not evidence.
+   * If the target happens not to be measurable (an unfocused key press, a vanishing element),
+   * the step should carry on — for the spotlight it is the other way round, because there a
+   * miss means the viewer SEES NOTHING of what the caption is talking about.
    */
-  const tett = async (cel, ikon, szoveg, gyuruvel = true) => {
-    if (!szoveg && !ikon) return
+  const action = async (target, kind, text, withRing = true) => {
+    if (!text && !kind) return
     try {
-      const b = await cel.boundingBox({ timeout: 2000 })
+      const b = await target.boundingBox({ timeout: 2000 })
       if (!b) return
-      const rovid = String(szoveg ?? "").slice(0, 48)
+      const short = String(text ?? "").slice(0, 48)
       await page.evaluate(
-        ([bb, ik, sz, gy]) => window.__demoTett?.(bb, ik, sz, gy),
-        [{ x: b.x, y: b.y, w: b.width, h: b.height }, esc(ikon), esc(rovid), gyuruvel]
+        ([bb, k, t, r]) => window.__demoAction?.(bb, k, t, r),
+        [{ x: b.x, y: b.y, w: b.width, h: b.height }, esc(kind), esc(short), withRing]
       )
       await page.waitForTimeout(650)
     } catch {
-      /* a jelzés elmaradhat — a lépés nem */
+      /* the marker may be skipped — the step may not */
     }
   }
-  const tettOff = async () => {
-    await page.evaluate(() => window.__demoTett?.(null)).catch(() => {})
+  const actionOff = async () => {
+    await page.evaluate(() => window.__demoAction?.(null)).catch(() => {})
   }
 
-  // A kiemelés UTÁN mindig jöjjön világos szakasz: ha a sötétítés folyamatos, a néző
-  // hozzászokik, és a képernyő végig sötétnek látszik.
-  const reflektorOff = async () => {
-    await page.evaluate(() => window.__demoBuborek?.(null)).catch(() => {})
-    await page.waitForTimeout(fk.tempo?.levego ?? 900)
+  // Always follow a highlight with a bright stretch: if the dimming is continuous, the viewer
+  // gets used to it and the screen just looks dark throughout.
+  const spotlightOff = async () => {
+    await page.evaluate(() => window.__demoSpotlight?.(null)).catch(() => {})
+    await page.waitForTimeout(scenario.pace?.breath ?? 900)
   }
 
   /**
-   * LELET-GYŰJTÉS — amit a felvétel MEGTUD, azt le is teszi.
+   * FINDINGS — whatever the recording learns, it also writes down.
    *
-   * A demó az egyetlen eszköz a láncban, ami a valódi felületen, valódi adaton, INTERAKCIÓ
-   * KÖZBEN jár. Az így szerzett tudás máshol nincs meg:
+   * The demo is the only tool in the chain that walks the real UI, on real data, DURING
+   * INTERACTION. What it learns that way exists nowhere else:
    *
-   *   • a statikus felület-térkép (atlas) a saját fejlécében kimondja, hogy „regions that
-   *     appear after interaction (detail panes, action bars, search results, menus) are not
-   *     in this map" — a felvétel viszont ÉPP azokban jár;
-   *   • egy elbukott lépés nem csak a demó baja: vagy a horgony nem létezik, vagy létezik,
-   *     de nem AKKOR látszik — és ezt a statikus lista nem tudja megkülönböztetni.
+   *   • a static UI map states in its own header that regions appearing after interaction
+   *     (detail panes, action bars, search results, menus) are not in it — while the recording
+   *     is walking exactly through those;
+   *   • a failed step is not only the demo's problem: either the anchor does not exist, or it
+   *     exists but is not visible AT THAT MOMENT — and a static list cannot tell the two apart.
    *
-   * Ezért lépésenként rögzítjük, milyen `data-testid` volt JELEN a lapon abban a pillanatban.
-   * A különbség két lépés között = az interakció után megjelenő felület, vagyis pontosan a
-   * statikus térkép vakfoltja.
+   * So per step we record which `data-testid`s were PRESENT on the page at that moment. The
+   * difference between two steps = the UI that appears after interaction, i.e. precisely the
+   * blind spot of the static map.
    */
-  const leletek = []
-  const lathatoHorgonyok = async () => {
+  const findings = []
+  const visibleAnchors = async () => {
     try {
       return await page.evaluate(() =>
         [...document.querySelectorAll("[data-testid]")].map((e) => e.getAttribute("data-testid"))
@@ -401,12 +404,12 @@ export async function capture({ fk, config, chromium }) {
     }
   }
 
-  const eredmenyek = await futtatLepeseket({
+  const results = await runSteps({
     page,
-    lepesek: fk.lepesek,
-    keret: { felvetel: true, feliratoz, reflektor, reflektorOff, tett, tettOff, fk, config },
-    utana: async (lepes, cimke, allapot) => {
-      leletek.push({ cimke, allapot, horgonyok: await lathatoHorgonyok() })
+    steps: scenario.steps,
+    ctx: { recording: true, caption, spotlight, spotlightOff, action, actionOff, scenario, config },
+    after: async (step, label, status) => {
+      findings.push({ label, status, anchors: await visibleAnchors() })
     },
   })
 
@@ -414,5 +417,5 @@ export async function capture({ fk, config, chromium }) {
   await ctx.close()
   await browser.close()
 
-  return { eredmenyek, leletek, munkaDir, tracesDir: path.join(munkaDir, "test-results"), nezet, mobil }
+  return { results, findings, workDir, tracesDir: path.join(workDir, "test-results"), viewport, mobile }
 }

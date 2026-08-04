@@ -1,0 +1,83 @@
+# Example scenario — `npx set-demo examples/example.yaml`
+#
+# ⚠ THIS DOES NOT RUN AS-IS: the selectors point at an imaginary application. The file
+# documents the FIELDS — copy it and rewrite it against your own UI.
+#
+# A scenario IS a walkthrough test. Every step may carry an `expect` — that is what makes the
+# recording evidence. A step without one is allowed, but it proves nothing.
+
+title: "Creating a task"
+subtitle: "New feature"
+version: "v1.4.0"
+intro: >-
+  Tasks now open from the list, and the due date can be set at creation time —
+  no need to edit it afterwards.
+
+# `viewport: mobile` → 390×844, touch emulation, no cursor (there is no mouse pointer on a phone).
+viewport: { width: 1280, height: 800 }
+
+# The crop is in viewport coordinates; the engine converts it to the rendered resolution.
+# It only affects the GIF — here it cuts off the left icon rail.
+crop: { x: 64, y: 0, w: 1216, h: 800 }
+
+pace:
+  idle: 2.5     # speed up network waiting
+  action: 1.0   # clicks and scrolling stay at normal speed
+  breath: 900   # after every highlight, this much undimmed picture
+
+# SETUP (optional) — the demo PRODUCES what it is about to show. A separate browser context,
+# desktop viewport, no captions and no spotlight; it is not recorded. A failure ABORTS the run.
+setup:
+  - label: "Create a project so there is something to add to"
+    goto: /projects/new
+    fill: { field: "[data-testid='input-project-name']", value: "Demo project" }
+    click: "[data-testid='btn-save']"
+    expect: "text=Project created"
+
+steps:
+  - label: "Open the task list"
+    goto: /tasks
+    note: "The list shows every open task, unfiltered."
+    expect: "[data-testid='task-list']"
+
+  # Criterion-based choice from a list. Without it the demo shows "the first row", i.e. A
+  # DIFFERENT ONE EVERY RUN — and the explanation may drift away from the picture.
+  - label: "Pick an open task"
+    pick:
+      list: "[data-testid^='task-row-']"
+      contains: ["Open"]
+      excludes: ["Archived"]
+      within: "button[data-testid^='btn-open-']"   # criterion on the ROW, click on the button
+    expect: "[data-testid='task-detail']"
+
+  - label: "Set the due date"
+    # `{{today}}` / `{{today+3}}` / `{{today-1}}` resolve to the day of the run. With a
+    # hardcoded date the scenario breaks SILENTLY tomorrow: the recording completes, it just
+    # shows nothing.
+    fill: { field: "[data-testid='input-due-date']", value: "{{today+3}}" }
+    note: "The due date can be set at creation time — no need to edit it afterwards."
+
+  - label: "Save"
+    bubble: "This is where it saves — the list updates immediately."   # before the click, at the target
+    bubbleHold: 1900
+    click: "[data-testid='btn-save-task']"
+    spotlight:                                                          # after the click, on the result
+      on: "[data-testid='task-list']"
+      text: "The task is in the list, with its due date."
+      hold: 1800
+    expect: "text=Saved"
+
+  - label: "Scan the list"
+    scroll: { on: "[data-testid='task-list']", by: 400 }
+    wait: 2000
+
+# The page embeds VIDEO by default. GIF only on request — embedded in an e-mail BODY, an
+# animated GIF is the only thing that starts by itself:
+#
+# gif: { fps: 1.6, frameDuration: 0.9, width: 900 }
+# page: { media: gif }
+#
+# ── Hungarian field names ────────────────────────────────────────────────────────────────
+# The engine was extracted from a Hungarian project, so the original field names are accepted
+# as aliases (cimke/label, kattint/click, fokusz/spotlight, …). English is the schema; see
+# `src/scenario.mjs` for the full table. Mixing the two in one scenario works but reads badly.

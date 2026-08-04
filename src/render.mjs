@@ -1,56 +1,56 @@
-// Renderelés: Playwright-trace → MP4 (kurzor, koppintás, tempó) → vágott GIF.
+// Rendering: Playwright trace → MP4 (cursor, tap, pace) → cropped GIF.
 //
-// A kurzort, a kattintás-hullámot és a tempó-vezérlést a `playwright-recast` adja a
-// trace-ből. NE írj rá saját overlay-t: a mért kísérlet szerint a saját változat ugyanezt
-// csak rosszabbul tudta.
+// The cursor, the click ripple and the pace control come from `playwright-recast`, out of the
+// trace. Do NOT write your own overlay for those: a measured experiment showed the home-grown
+// version did the same thing, only worse.
 
 import fs from "node:fs"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { Recast } from "playwright-recast"
 
-const paros = (n) => Math.max(2, Math.round(n / 2) * 2)
+const even = (n) => Math.max(2, Math.round(n / 2) * 2)
 
 /**
  * @param {object} o
- * @param {string} o.tracesDir  a `test-results` könyvtár (trace.zip + .webm)
- * @param {string} o.mp4Path    a kimeneti MP4
- * @param {{width:number,height:number}} o.nezet  a felvételi viewport
- * @param {boolean} o.mobil
- * @param {{uresjarat?:number, cselekves?:number}} [o.tempo]
- * @param {number} [o.maxOldal=1920]  a renderelt kép hosszabbik oldalának maximuma
+ * @param {string} o.tracesDir  the `test-results` directory (trace.zip + .webm)
+ * @param {string} o.mp4Path    the output MP4
+ * @param {{width:number,height:number}} o.viewport  the recording viewport
+ * @param {boolean} o.mobile
+ * @param {{idle?:number, action?:number}} [o.pace]
+ * @param {number} [o.maxSide=1920]  cap for the longer side of the rendered image
  */
-export async function renderVideo({ tracesDir, mp4Path, nezet, mobil, tempo, maxOldal }) {
+export async function renderVideo({ tracesDir, mp4Path, viewport, mobile, pace, maxSide }) {
   let pipeline = Recast.from(tracesDir)
     .parse()
-    .speedUp({ duringIdle: tempo?.uresjarat ?? 2.5, duringUserAction: tempo?.cselekves ?? 1.0 })
+    .speedUp({ duringIdle: pace?.idle ?? 2.5, duringUserAction: pace?.action ?? 1.0 })
 
-  // ⚠ Mobilon NINCS egérmutató — a kurzor-nyíl ott hazugság lenne: olyat mutatna a
-  // telefonos képernyőn, ami a valóságban nincs. A koppintás-hullám viszont pont a helyes
-  // jelzés: azt mutatja, hol ért a képernyőhöz az ujj.
-  if (!mobil) pipeline = pipeline.cursorOverlay()
+  // ⚠ There is NO mouse pointer on mobile — a cursor arrow would be a lie there: it would show
+  // something on the phone screen that does not exist in reality. The tap ripple, on the other
+  // hand, is exactly the right marker: it shows where the finger touched the screen.
+  if (!mobile) pipeline = pipeline.cursorOverlay()
   pipeline = pipeline.clickEffect()
 
-  // ⚠ A `resolution` KÖTELEZŐ, ha nem 16:9 a viewport: a recast alapból 1920×1080-ba
-  // renderel, és a portré (mobil) felvételt vízszintesen SZÉTNYÚJTJA — mérve: a szöveg
-  // olvashatatlanul széthúzva jött ki.
+  // ⚠ `resolution` is MANDATORY when the viewport is not 16:9: recast renders into 1920×1080 by
+  // default and STRETCHES a portrait (mobile) recording horizontally — measured: the text came
+  // out unreadably wide.
   //
-  // ⚠⚠ A nagyítás NEM fix szorzó. Fix 3×-szal az asztali 1280×800-ból 3840×2400 lesz —
-  // négyszer annyi pixel, mint a korábbi 1920×1080, és mérve HÁROMSZOROS fájlméret (2 MB →
-  // 6 MB) nulla haszonért. Ehelyett a viewport ARÁNYÁT tartjuk, és a hosszabbik oldalt
-  // maximáljuk: asztalon ~1,5×, portré mobilon ~2,3× nagyítás jön ki magától.
-  const hosszabb = Math.max(nezet.width, nezet.height)
-  const skala = Math.max(1, (maxOldal ?? 1920) / hosszabb)
+  // ⚠⚠ The scale factor is NOT a constant. With a fixed 3×, desktop 1280×800 becomes 3840×2400
+  // — four times the pixels of the previous 1920×1080, and a measured THREEFOLD file size
+  // (2 MB → 6 MB) for zero benefit. Instead we keep the viewport's ASPECT and cap the longer
+  // side: that yields ~1.5× on desktop and ~2.3× on portrait mobile, by itself.
+  const longer = Math.max(viewport.width, viewport.height)
+  const scale = Math.max(1, (maxSide ?? 1920) / longer)
   await pipeline
     .render({
       format: "mp4",
-      resolution: { width: paros(nezet.width * skala), height: paros(nezet.height * skala) },
+      resolution: { width: even(viewport.width * scale), height: even(viewport.height * scale) },
     })
     .toFile(mp4Path)
 }
 
-/** A renderelt videó tényleges felbontása — ebből jön a vágás átszámítása. */
-export function videoMeret(mp4Path) {
+/** The rendered video's actual resolution — the crop conversion is derived from this. */
+export function videoSize(mp4Path) {
   const out = execFileSync("ffprobe", [
     "-v", "error", "-select_streams", "v:0",
     "-show_entries", "stream=width,height", "-of", "json", mp4Path,
@@ -59,42 +59,43 @@ export function videoMeret(mp4Path) {
 }
 
 /**
- * MP4 → GIF, opcionális vágással.
+ * MP4 → GIF, with an optional crop.
  *
- * ⚠ A `vago` a FORGATÓKÖNYVBEN a viewport koordinátáiban van — mert a szerző azt látja a
- * képernyőn. A render más felbontású, ezért itt át kell számolni, és KÉT skálafaktorral,
- * nem eggyel: ha a viewport aránya nem egyezik a renderével (pl. 16:10 vs 16:9), a kép a
- * két tengelyen KÜLÖNBÖZŐ arányban nyúlik. Egyetlen faktorral a magasság túlfut a képen,
- * és az ffmpeg elhasal — ami még a jobbik eset: a néma elcsúszás észrevétlen maradna.
+ * ⚠ In the SCENARIO, `crop` is in viewport coordinates — because that is what the author sees
+ * on screen. The render has a different resolution, so it must be converted here, and with TWO
+ * scale factors, not one: if the viewport's aspect differs from the render's (e.g. 16:10 vs
+ * 16:9), the image stretches by a DIFFERENT ratio on each axis. With a single factor the height
+ * overruns the frame and ffmpeg fails — which is the better outcome: a silent misalignment
+ * would go unnoticed.
  *
- * A vágás nem kozmetika: sűrű felületen a GIF ~70–85 kB/kocka, tehát a levágott üres sáv
- * közvetlenül a csatolmány méretét szabja meg (mérve: 2,3 MB → 630 kB).
+ * Cropping is not cosmetic: on a dense UI a GIF costs ~70–85 kB per frame, so the empty strip
+ * you cut off directly determines the attachment size (measured: 2.3 MB → 630 kB).
  */
-export function renderGif({ mp4Path, gifPath, munkaDir, nezet, vago, gif }) {
-  const meret = videoMeret(mp4Path)
-  const skalaX = meret.width / nezet.width
-  const skalaY = meret.height / nezet.height
+export function renderGif({ mp4Path, gifPath, workDir, viewport, crop, gif }) {
+  const size = videoSize(mp4Path)
+  const scaleX = size.width / viewport.width
+  const scaleY = size.height / viewport.height
 
-  let szures
-  if (vago) {
-    const x = paros(vago.x * skalaX)
-    const y = paros(vago.y * skalaY)
-    const w = Math.min(paros(vago.w * skalaX), meret.width - x)
-    const h = Math.min(paros(vago.h * skalaY), meret.height - y)
-    szures = `fps=${gif?.fps ?? 1.6},crop=${w}:${h}:${x}:${y},scale=${gif?.szelesseg ?? 900}:-1:flags=lanczos`
-    console.log(`  vágás: ${vago.w}×${vago.h} @${vago.x},${vago.y} (viewport) → ${w}×${h} @${x},${y} (render)`)
+  let filter
+  if (crop) {
+    const x = even(crop.x * scaleX)
+    const y = even(crop.y * scaleY)
+    const w = Math.min(even(crop.w * scaleX), size.width - x)
+    const h = Math.min(even(crop.h * scaleY), size.height - y)
+    filter = `fps=${gif?.fps ?? 1.6},crop=${w}:${h}:${x}:${y},scale=${gif?.width ?? 900}:-1:flags=lanczos`
+    console.log(`  crop: ${crop.w}×${crop.h} @${crop.x},${crop.y} (viewport) → ${w}×${h} @${x},${y} (render)`)
   } else {
-    szures = `fps=${gif?.fps ?? 1.6},scale=${gif?.szelesseg ?? 900}:-1:flags=lanczos`
+    filter = `fps=${gif?.fps ?? 1.6},scale=${gif?.width ?? 900}:-1:flags=lanczos`
   }
 
-  const kockak = path.join(munkaDir, "kockak")
-  fs.mkdirSync(kockak, { recursive: true })
-  execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", mp4Path, "-vf", szures, path.join(kockak, "k-%03d.png")])
+  const frames = path.join(workDir, "frames")
+  fs.mkdirSync(frames, { recursive: true })
+  execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", mp4Path, "-vf", filter, path.join(frames, "f-%03d.png")])
 
   execFileSync("ffmpeg", [
     "-y", "-loglevel", "error",
-    "-framerate", String(gif?.kockahossz ? 1 / gif.kockahossz : 1.1),
-    "-i", path.join(kockak, "k-%03d.png"),
+    "-framerate", String(gif?.frameDuration ? 1 / gif.frameDuration : 1.1),
+    "-i", path.join(frames, "f-%03d.png"),
     "-vf", "split[a][b];[a]palettegen=max_colors=96[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
     "-loop", "0", gifPath,
   ])

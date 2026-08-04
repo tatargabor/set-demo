@@ -1,53 +1,55 @@
-// set-demo konfiguráció — MÁSOLD a projekted gyökerébe `set-demo.config.mjs` néven.
+// set-demo configuration — COPY this into your project root as `set-demo.config.mjs`.
 //
-// Ez a fájl tartalmazza a PROJEKT-SPECIFIKUS részt. A motor (felvétel, reflektor, render,
-// lap) semmit nem tud a te alkalmazásodról — a belépés, a cím és a kimenet innen jön.
+// This file holds the PROJECT-SPECIFIC part. The engine (recording, spotlight, render, page)
+// knows nothing about your application — the login, the target and the output come from here.
 
 export default {
-  // A célrendszer. SOHA ne az éles legyen: a demó valós műveleteket hajt végre (kattint,
-  // létrehoz, ment), és a felvételen valós adat látszik.
-  baseUrl: process.env.DEMO_BASE_URL || "https://teszt.pelda.hu",
+  // The target system. NEVER production: the demo performs real actions (clicks, creates,
+  // saves) and real data is visible on the recording.
+  baseUrl: process.env.DEMO_BASE_URL || "https://staging.example.com",
 
-  // Hova kerül a kimenet (forgatókönyvenként egy alkönyvtár).
-  outDir: "docs/demok/dist",
+  // Where the output goes (one subdirectory per scenario).
+  outDir: "docs/demos/dist",
 
-  // A lap láblécében megjelenő környezet-név.
-  kornyezet: "teszt",
+  // The environment name shown in the page footer.
+  environment: "staging",
 
-  locale: "hu-HU",
+  // Drives the browser context AND the language of the generated page (English and Hungarian
+  // ship with the package; for anything else pass `pageStrings`).
+  locale: "en-US",
 
   /**
-   * Belépés. A demó DEDIKÁLT felhasználóval fusson, soha nem egy kollégáéval: a felvétel
-   * kiküldhető anyag, és a kattintások valós műveletek egy valós környezetben.
+   * Login. Run the demo with a DEDICATED user, never a colleague's: the recording is material
+   * you send out, and the clicks are real actions in a real environment.
    *
-   * Az alábbi minta Auth.js (NextAuth) credentials-belépés. A UI-login hidratáció-függő és
-   * flaky, ezért megyünk közvetlenül a végpontra.
+   * The sample below is an Auth.js (NextAuth) credentials login. UI login depends on hydration
+   * and is flaky, so we go straight to the endpoint.
    */
   async login(context, { baseUrl }) {
     const email = process.env.DEMO_LOGIN_EMAIL
-    const jelszo = process.env.DEMO_LOGIN_PASSWORD
-    if (!email || !jelszo) throw new Error("Hiányzik a DEMO_LOGIN_EMAIL / DEMO_LOGIN_PASSWORD")
+    const password = process.env.DEMO_LOGIN_PASSWORD
+    if (!email || !password) throw new Error("Missing DEMO_LOGIN_EMAIL / DEMO_LOGIN_PASSWORD")
 
     const req = context.request
     const csrf = await (await req.get(`${baseUrl}/api/auth/csrf`)).json()
     await req.post(`${baseUrl}/api/auth/callback/credentials`, {
-      form: { csrfToken: csrf.csrfToken, email, password: jelszo, redirect: "false" },
+      form: { csrfToken: csrf.csrfToken, email, password, redirect: "false" },
     })
     const session = await (await req.get(`${baseUrl}/api/auth/session`)).json()
-    if (!session?.user) throw new Error(`Sikertelen belépés (${email})`)
+    if (!session?.user) throw new Error(`Login failed (${email})`)
   },
 
   /**
-   * Környezet-előkészítés a felvétel előtt (opcionális).
+   * Environment preparation before the recording (optional).
    *
-   * ⚠ Amit itt elrejtesz, az ELREJTÉS, nem javítás. Ha a felvételen olyan zaj látszik, ami
-   * nem a bemutatott funkcióról szól (villanás, elcsúszás), azt vedd fel BEJELENTÉSKÉNT is
-   * — a demó egyik haszna épp az, hogy megtalálja az ilyet.
+   * ⚠ Whatever you hide here is HIDING, not fixing. If the recording shows noise that is not
+   * about the feature being demonstrated (a flash, a shift), file it AS A BUG too — one of the
+   * demo's benefits is precisely that it finds such things.
    */
   async prepare(context) {
     await context.addInitScript(() => {
       try {
-        // Példa: egy kliens-oldali beállítás előre rögzítése, hogy a hidratálás ne villanjon.
+        // Example: pre-seeding a client-side setting so hydration does not flash.
         if (!localStorage.getItem("app-layout-prefs")) {
           localStorage.setItem("app-layout-prefs", JSON.stringify({ state: {}, version: 0 }))
         }

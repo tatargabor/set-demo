@@ -1,10 +1,10 @@
-// set-demo — publikus API.
+// set-demo — public API.
 //
 //   import { runDemo } from "set-demo"
 //   await runDemo({ config, scenarioPath })
 //
-// A projekt-specifikus rész (belépés, base URL, kimenet, környezet-előkészítés) a
-// `config`-ból jön — lásd `set-demo.config.example.mjs`.
+// The project-specific part (login, base URL, output, environment preparation) comes from
+// `config` — see `set-demo.config.example.mjs`.
 
 import fs from "node:fs"
 import path from "node:path"
@@ -12,123 +12,148 @@ import { createRequire } from "node:module"
 import { capture } from "./capture.mjs"
 import { renderVideo, renderGif } from "./render.mjs"
 import { buildPage } from "./page.mjs"
+import { normaliseScenario, normaliseConfig } from "./scenario.mjs"
 
 const require = createRequire(import.meta.url)
 const yaml = require("js-yaml")
 
 /**
  * @param {object} o
- * @param {object} o.config        a projekt konfigurációja (baseUrl, outDir, login, prepare…)
- * @param {string} o.scenarioPath  a forgatókönyv-YAML útvonala
- * @param {object} [o.chromium]    a Playwright chromium (a hívó adja — peer dependency)
- * @returns {Promise<{ok:boolean, eredmenyek:Array, mp4:string, gif:string|null, lap:string}>}
- *   A `gif` csak akkor nem `null`, ha a forgatókönyv kifejezetten kérte (`gif:` blokk).
+ * @param {object} o.config        the project's config (baseUrl, outDir, login, prepare…)
+ * @param {string} o.scenarioPath  path to the scenario YAML
+ * @param {object} [o.chromium]    Playwright's chromium (supplied by the caller — peer dep)
+ * @returns {Promise<{ok:boolean, results:Array, mp4:string, gif:string|null, page:string}>}
+ *   `gif` is non-null only if the scenario explicitly asked for it (a `gif:` block).
  */
 export async function runDemo({ config, scenarioPath, chromium }) {
   if (!chromium) {
-    // A Playwright a HÍVÓ projekté (peer dependency): így ugyanaz a verzió és ugyanazok a
-    // böngésző-binárisok futnak, mint a projekt tesztjeinél.
+    // Playwright belongs to the CALLING project (peer dependency): that way the same version
+    // and the same browser binaries run as in the project's own tests.
     //
-    // ⚠ A fallback-import a CSOMAG node_modules-ából old fel, ahol tipikusan nincsenek
-    // letöltve a binárisok — a futás ilyenkor rejtélyes „Executable doesn't exist"-tel áll
-    // meg, jóval a hiba oka után. Ezért mondjuk ki, mi a helyes hívás.
+    // ⚠ The fallback import resolves from the PACKAGE's node_modules, where the binaries are
+    // typically not installed — the run then stops with a mysterious "Executable doesn't exist"
+    // long after the actual cause. So we spell out what the correct call is.
     try {
       const pw = await import("@playwright/test")
       chromium = (pw.default ?? pw).chromium
     } catch {
       throw new Error(
-        "Nincs Playwright. Add át a hívó projektéből:\n" +
+        "No Playwright. Pass it in from the calling project:\n" +
           "  import playwright from \"@playwright/test\"\n" +
           "  await runDemo({ config, scenarioPath, chromium: playwright.chromium })"
       )
     }
   }
 
-  const fk = yaml.load(fs.readFileSync(scenarioPath, "utf-8"))
-  const nev = path.basename(scenarioPath).replace(/\.ya?ml$/, "")
-  const out = path.join(config.outDir, nev)
+  const cfg = normaliseConfig(config)
+  const scenario = normaliseScenario(yaml.load(fs.readFileSync(scenarioPath, "utf-8")))
+  const name = path.basename(scenarioPath).replace(/\.ya?ml$/, "")
+  const out = path.join(cfg.outDir, name)
   fs.mkdirSync(out, { recursive: true })
 
-  console.log(`Forgatókönyv: ${fk.cim}`)
-  console.log(`Cél: ${config.baseUrl}\n`)
+  console.log(`Scenario: ${scenario.title}`)
+  console.log(`Target: ${cfg.baseUrl}\n`)
 
-  const { eredmenyek, leletek, munkaDir, tracesDir, nezet, mobil } = await capture({ fk, config, chromium })
+  const { results, findings, workDir, tracesDir, viewport, mobile } = await capture({
+    scenario,
+    config: cfg,
+    chromium,
+  })
 
-  const mp4 = path.join(out, `${nev}.mp4`)
-  await renderVideo({ tracesDir, mp4Path: mp4, nezet, mobil, tempo: fk.tempo, maxOldal: fk.maxOldal })
+  const mp4 = path.join(out, `${name}.mp4`)
+  await renderVideo({ tracesDir, mp4Path: mp4, viewport, mobile, pace: scenario.pace, maxSide: scenario.maxSide })
 
   /**
-   * A GIF OPT-IN — alapból NEM készül.
+   * The GIF is OPT-IN — it is NOT produced by default.
    *
-   * ⚠ Korábban feltétel nélkül generálódott, és mérve **senki nem olvasta**: a demó-lap és a
-   * kiadás-lap is videót ágyaz, a `lap.mozgokep: gif` kapcsolót pedig egyetlen forgatókönyv
-   * sem használta. Költsége demónként ~0,4 mp és ~1,4 MB — az idő nem sok, a baj az, hogy a
-   * kiírt „GIF 1421 kB" sor azt sugallta, hogy van egy szállítandó fájl, holott nincs.
+   * ⚠ It used to be generated unconditionally, and measurement showed **nobody read it**: both
+   * the demo page and the release page embed video, and not a single scenario used the
+   * `page.media: gif` switch. It costs ~0.4 s and ~1.4 MB per demo — the time is not much; the
+   * problem is that the printed "GIF 1421 kB" line suggested there was a deliverable file, when
+   * there was not.
    *
-   * A képesség MEGMARAD, mert egy valós esetet szolgál ki: **levél TÖRZSÉBE ágyazva az
-   * animált GIF az egyetlen, ami magától elindul** — MP4 ott nem játszik. Ha egyszer inline
-   * levelet küldünk, egy `gif:` blokk visszakapcsolja.
+   * The capability STAYS, because it serves a real case: **embedded in an e-mail BODY, an
+   * animated GIF is the only thing that starts by itself** — MP4 does not play there. If we
+   * ever send inline mail, a `gif:` block switches it back on.
    */
-  const gifKell = !!fk.gif || fk.lap?.mozgokep === "gif"
-  const gifUt = path.join(out, `${nev}.gif`)
-  const gif = gifKell ? gifUt : null
-  if (gifKell) renderGif({ mp4Path: mp4, gifPath: gif, munkaDir, nezet, vago: fk.vago, gif: fk.gif })
-  // ⚠ A KORÁBBI futás GIF-jét TÖRÖLJÜK, ha most már nem kell. Enélkül a mappában ottmarad
-  // egy elavult fájl, amit a következő ember kiküldhet — és az a felvétel egy RÉGI állapotot
-  // mutatna. A néma elavulás kívülről megkülönböztethetetlen az érvényes kimenettől.
-  else if (fs.existsSync(gifUt)) fs.rmSync(gifUt)
+  const wantGif = !!scenario.gif || scenario.page?.media === "gif"
+  const gifPath = path.join(out, `${name}.gif`)
+  const gif = wantGif ? gifPath : null
+  if (wantGif) renderGif({ mp4Path: mp4, gifPath: gif, workDir, viewport, crop: scenario.crop, gif: scenario.gif })
+  // ⚠ DELETE a PREVIOUS run's GIF if it is no longer wanted. Otherwise a stale file stays in
+  // the directory and the next person may send it out — and that recording would show an OLD
+  // state. Silent staleness is indistinguishable from valid output when seen from outside.
+  else if (fs.existsSync(gifPath)) fs.rmSync(gifPath)
 
-  const lap = path.join(out, `${nev}.html`)
-  fs.writeFileSync(lap, buildPage({ fk, eredmenyek, mp4Path: mp4, gifPath: gif, kornyezet: config.kornyezet }))
+  const pagePath = path.join(out, `${name}.html`)
+  fs.writeFileSync(
+    pagePath,
+    buildPage({
+      scenario,
+      results,
+      mp4Path: mp4,
+      gifPath: gif,
+      environment: cfg.environment,
+      locale: cfg.locale,
+      strings: cfg.pageStrings,
+    })
+  )
 
-  fs.rmSync(munkaDir, { recursive: true, force: true })
+  fs.rmSync(workDir, { recursive: true, force: true })
 
   const kb = (f) => `${Math.round(fs.statSync(f).size / 1024)} kB`
   console.log("")
-  if (gif) console.log(`  GIF  ${kb(gif)}  ${gif}`)
-  console.log(`  MP4  ${kb(mp4)}  ${mp4}`)
-  console.log(`  lap  ${kb(lap)}  ${lap}`)
+  if (gif) console.log(`  GIF   ${kb(gif)}  ${gif}`)
+  console.log(`  MP4   ${kb(mp4)}  ${mp4}`)
+  console.log(`  page  ${kb(pagePath)}  ${pagePath}`)
 
   /**
-   * LELETEK — amit a felvétel megtudott, és amit máshol NEM lehet megtudni.
+   * FINDINGS — what the recording learned, it also writes down.
    *
-   * A demó az egyetlen eszköz, ami a valós felületen, INTERAKCIÓ KÖZBEN jár. A statikus
-   * felület-térkép (atlas) a saját fejlécében mondja ki, hogy amit interakció hoz elő
-   * (részlet-panelek, akció-sávok, keresési találatok, menük), az nincs benne. A felvétel
-   * viszont ÉPP ott jár — tehát a leletei annak a térképnek a vakfoltját mérik.
+   * The demo is the only tool in the chain that walks the real UI, on real data, DURING
+   * INTERACTION. The knowledge gained that way exists nowhere else:
    *
-   * Két dolgot teszünk le, mindkettőt gépi alakban:
-   *   • `ujHorgonyok` — ami CSAK interakció után jelent meg (a statikus térkép hiánya);
-   *   • `bukott` — a lépés, ami nem ment: vagy a horgony nem létezik, vagy létezik, de nem
-   *     AKKOR látszik. A kettőt a statikus lista nem tudja megkülönböztetni, a felvétel igen.
+   *   • a static UI map states in its own header that regions appearing after interaction
+   *     (detail panes, action bars, search results, menus) are not in it — the recording is
+   *     walking exactly through those;
+   *   • a failed step is not only the demo's problem: either the anchor does not exist, or it
+   *     exists but is not visible AT THAT MOMENT — and a static list cannot tell them apart.
    *
-   * ⚠ Ez ADAT, nem ítélet. Hogy a hiány a térképé, a specé vagy a felületé, azt ember dönti el.
+   * ⚠ This is DATA, not a verdict. Whether a gap belongs to the map, the spec or the UI is for
+   * a human to decide.
    */
-  const eddigLatott = new Set()
-  const leletFajl = {
-    forgatokonyv: nev,
-    cim: fk.cim,
-    kornyezet: config.kornyezet,
-    lepesek: (leletek ?? []).map((l) => {
-      const uj = (l.horgonyok ?? []).filter((h) => !eddigLatott.has(h))
-      for (const h of l.horgonyok ?? []) eddigLatott.add(h)
-      return { cimke: l.cimke, allapot: l.allapot, ujHorgonyok: uj }
+  const seen = new Set()
+  const findingsFile = {
+    scenario: name,
+    title: scenario.title,
+    environment: cfg.environment,
+    steps: (findings ?? []).map((f) => {
+      const fresh = (f.anchors ?? []).filter((a) => !seen.has(a))
+      for (const a of f.anchors ?? []) seen.add(a)
+      return { label: f.label, status: f.status, newAnchors: fresh }
     }),
-    osszesHorgony: [...eddigLatott].sort(),
+    allAnchors: [...seen].sort(),
   }
-  fs.writeFileSync(path.join(out, "leletek.json"), JSON.stringify(leletFajl, null, 2))
+  fs.writeFileSync(path.join(out, "findings.json"), JSON.stringify(findingsFile, null, 2))
+  // ⚠ The file was called `leletek.json` before the package switched to English. Remove the
+  // old one — for the same reason the stale GIF is removed above: a leftover data file next to
+  // the current one looks like data, but describes an OLDER run, and nothing distinguishes the
+  // two from the outside.
+  const legacyFindings = path.join(out, "leletek.json")
+  if (fs.existsSync(legacyFindings)) fs.rmSync(legacyFindings)
 
-  const bukott = eredmenyek.filter((e) => e.allapot === "bukott")
-  if (bukott.length) {
-    console.error(`\n${bukott.length} lépés elvárása NEM teljesült — a demó nem küldhető ki így.`)
+  const failed = results.filter((r) => r.status === "failed")
+  if (failed.length) {
+    console.error(`\n${failed.length} step expectation(s) NOT met — the demo cannot be sent out like this.`)
   } else {
-    console.log(`\n${eredmenyek.length} lépés, minden elvárás teljesült.`)
+    console.log(`\n${results.length} steps, every expectation met.`)
   }
 
-  return { ok: bukott.length === 0, eredmenyek, mp4, gif, lap }
+  return { ok: failed.length === 0, results, mp4, gif, page: pagePath }
 }
 
 export { capture } from "./capture.mjs"
-export { renderVideo, renderGif, videoMeret } from "./render.mjs"
-export { buildPage } from "./page.mjs"
+export { renderVideo, renderGif, videoSize } from "./render.mjs"
+export { buildPage, pageStrings } from "./page.mjs"
 export { overlayScript, escapeHtml } from "./overlay.mjs"
+export { normaliseScenario, normaliseConfig } from "./scenario.mjs"

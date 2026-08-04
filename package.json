@@ -1,7 +1,7 @@
 {
   "name": "set-demo",
-  "version": "0.1.0",
-  "description": "Funkció-demó felvétel valós webalkalmazásról: forgatókönyv-YAML → GIF + MP4 + önhordó HTML lap, kurzorral, reflektorral és elvárás-kapuval.",
+  "version": "0.2.0",
+  "description": "Feature demos recorded from a real web app: one scenario YAML → MP4 + a self-contained HTML page, with cursor, spotlight and an expectation gate.",
   "type": "module",
   "license": "MIT",
   "author": "Gábor Tatár",

@@ -1,156 +1,186 @@
 # set-demo
 
-**Funkció-demó felvétel valós webalkalmazásról.** Egy forgatókönyv-YAML-ből **MP4-et és
-önhordó HTML lapot** készít — kurzorral, reflektorral, magyarázat-sávval —, és a felvétel
-**egyben végigpróba**: minden lépéshez elvárás tartozhat, és ha egy nem teljesül, a futás
-hangosan elhasal. (GIF csak kérésre — lásd lentebb.)
+**Feature demos recorded from a real web application.** From one scenario YAML it produces an
+**MP4 and a self-contained HTML page** — with a cursor, a spotlight and a caption bar — and the
+recording **is a walkthrough test**: every step may carry an expectation, and if one is not met
+the run fails loudly. (GIF only on request — see below.)
 
-> **Miért:** a release notes szövege önmagában nem viszi át az új funkciót, a nagy
-> kézikönyvben pedig senki nem találja meg, mi változott. Egy funkcióhoz egy lap, egy
-> mozgókép — külön kiküldhetően.
+> **Why:** release notes alone do not get a new feature across, and nobody finds "what changed"
+> inside a large manual. One feature, one page, one moving image — sendable on its own.
 
-## Telepítés
+## Install
 
 ```bash
 npm i -D set-demo
 ```
 
-Rendszer-függőség: **`ffmpeg` és `ffprobe`** a PATH-on. A Playwright a hívó projekté
-(peer dependency) — így ugyanaz a verzió és ugyanazok a böngésző-binárisok futnak, mint a
-projekt tesztjeinél.
+System dependency: **`ffmpeg` and `ffprobe`** on the PATH. Playwright belongs to the calling
+project (peer dependency) — so the same version and the same browser binaries run as in the
+project's own tests.
 
-## Használat
+## Usage
 
-1. Másold a `set-demo.config.example.mjs`-t a projekted gyökerébe `set-demo.config.mjs` néven,
-   és töltsd ki a belépést + a base URL-t.
-2. Írj forgatókönyvet (`docs/demok/pelda.yaml` — lásd `examples/`).
-3. Futtasd:
+1. Copy `set-demo.config.example.mjs` into your project root as `set-demo.config.mjs`, and fill
+   in the login and the base URL.
+2. Write a scenario (`docs/demos/example.yaml` — see `examples/`).
+3. Run it:
 
 ```bash
-npx set-demo docs/demok/pelda.yaml
+npx set-demo docs/demos/example.yaml
 ```
 
-Vagy programból:
+Or from code:
 
 ```js
 import { runDemo } from "set-demo"
 import config from "./set-demo.config.mjs"
 
-const { ok, lap } = await runDemo({ config, scenarioPath: "docs/demok/pelda.yaml" })
+const { ok, page } = await runDemo({ config, scenarioPath: "docs/demos/example.yaml" })
 ```
 
-## Amit tud
+## What it does
 
 | | |
 |---|---|
-| **kimenet** | **MP4 + önhordó HTML lap**. GIF csak kérésre (`gif:` blokk) — lásd lentebb |
-| **kurzor + kattintás-hullám** | a Playwright trace-ből, a `playwright-recast`-tal |
-| **tett-jelzés** | *mit* csinálunk, nem csak hol: gyűrű + címke a beírásra, billentyűre, görgetésre, kattintásra |
-| **reflektor** | tetszőleges terület kiemelése: keret + háttér-sötétítés + rövid szöveg |
-| **magyarázat-sáv** | a lap aljára injektálva, ezért a tempó-vezérléssel együtt mozog |
-| **tempó** | az üresjárat gyorsítása, a cselekvés normál tempóban; „levegő” a kiemelések közt |
-| **mobil nézet** | `nezet: mobil` → 390×844, érintés-emuláció, portré felbontás, kurzor nélkül |
-| **kritérium-választás** | listából a megfelelő példány, kiírva melyik — nem „az első sor” |
-| **előkészítés** | `elokeszites:` — a demó ELŐÁLLÍTJA, amit mutat; külön kontextus, nem kerül a felvételre |
-| **elvárás-kapu** | a demó csak akkor készül el, ha a bemutatott út végigjárható |
+| **output** | **MP4 + a self-contained HTML page**. GIF only on request (a `gif:` block) — see below |
+| **cursor + click ripple** | from the Playwright trace, via `playwright-recast` |
+| **action marker** | *what* we are doing, not just where: a ring + a label for typing, key presses, scrolling, clicks |
+| **spotlight** | highlight any area: frame + dimmed background + a short line of text |
+| **caption bar** | injected into the page, so it moves together with the pace control |
+| **pace** | speed up idle time, keep actions at normal speed; "breathing room" between highlights |
+| **mobile viewport** | `viewport: mobile` → 390×844, touch emulation, portrait resolution, no cursor |
+| **criterion-based choice** | the right instance from a list, printed — not "the first row" |
+| **setup** | `setup:` — the demo PRODUCES what it shows; separate context, not recorded |
+| **expectation gate** | the demo is only produced if the path being shown is actually walkable |
 
-### A GIF OPT-IN — alapból csak MP4 készül
+### The GIF is OPT-IN — only MP4 by default
 
-A demó-lap és a kiadás-lap is **videót** ágyaz. Mérve ugyanarra a 7 lépéses demóra:
-**GIF 1,2 MB ugrálva** vs. **MP4 1,3 MB, 25 fps-en simán** — a GIF minden kockát teljes
-képként tárol, ezért kell ritkán mintavételezni, és ezért ugrik benne a görgetés.
+Both the demo page and the release page embed **video**. Measured on the same 7-step demo:
+**GIF 1.2 MB, jerky** vs **MP4 1.3 MB, smooth at 25 fps** — a GIF stores every frame as a full
+image, which is why it has to be sampled sparsely, and why scrolling jumps in it.
 
-Korábban a GIF feltétel nélkül készült, és **senki nem olvasta**: költsége demónként ~0,4 mp
-és ~1,4 MB, a kiírt „GIF 1421 kB" sor pedig azt sugallta, hogy van egy szállítandó fájl.
+The GIF used to be produced unconditionally, and **nobody read it**: it costs ~0.4 s and ~1.4 MB
+per demo, while the printed "GIF 1421 kB" line suggested there was a deliverable file.
 
-A képesség megmarad, mert egy valós esetet szolgál ki: **levél TÖRZSÉBE ágyazva az animált
-GIF az egyetlen, ami magától elindul** (MP4 ott nem játszik). Visszakapcsolás:
+The capability stays, because it serves a real case: **embedded in an e-mail BODY, an animated
+GIF is the only thing that starts by itself** (MP4 does not play there). To switch it back on:
 
 ```yaml
-gif: { fps: 1.6, kockahossz: 0.9, szelesseg: 900 }   # → a GIF elkészül
-lap: { mozgokep: gif }                                # → a LAP is GIF-et ágyaz
+gif: { fps: 1.6, frameDuration: 0.9, width: 900 }   # → the GIF is produced
+page: { media: gif }                                # → the PAGE embeds the GIF too
 ```
 
-### Két jelzés, két jelentés — ne mosd össze
+### Two markers, two meanings — do not conflate them
 
-| jel | szín | mit mond |
+| marker | colour | what it says |
 |---|---|---|
-| **reflektor** (keret + háttér-sötétítés + buborék) | petrol | *„ide nézz"* — hol van, amiről a felirat beszél |
-| **tett-jelzés** (gyűrű + monospace címke) | rózsa | *„ezt csinálom"* — `beír Tatár Padló`, `gomb Enter`, `kattint Logisztika` |
+| **spotlight** (frame + dimmed background + bubble) | teal | *"look here"* — where the thing the caption talks about is |
+| **action marker** (ring + monospace label) | rose | *"this is what I'm doing"* — `type Jane Doe`, `key Enter`, `click Logistics` |
 
-A `clickEffect` hulláma a trace-ből jön, tehát **csak a valódi egérkattintást** mutatja. A
-beírás, a billentyű és a görgetés a felvételen egyébként **nyomtalan**: a mező értéke
-egyszerre megjelenik, mintha magától történt volna — a néző a *helyet* látja, a *cselekvést*
-nem. Kattintásnál a tett-jelzés ezért csak címkét ad, gyűrűt nem (két egymásra rajzolt kör
-zavarna).
+The `clickEffect` ripple comes from the trace, so it only shows **real mouse clicks**. Typing,
+key presses and scrolling otherwise leave **no trace** on the recording: the field value simply
+appears, as if it had happened by itself — the viewer sees the *place*, not the *action*. For
+clicks the action marker therefore adds only a label, no ring (two circles drawn on top of each
+other would be distracting).
 
-⚠ A címke előtagja **szó, nem piktogram**: a headless Chromium fontkészletéből hiányzik a
-legtöbb szimbólum-glif — a `⌨` mérve `=`-ként renderelődött, vagyis a jelzés, aminek a
-megértést kellene segítenie, értelmetlen jelet mutatott. Ez csak a kész videón derül ki.
+⚠ The label prefix is a **word, not a pictogram**: headless Chromium's font set lacks most symbol
+glyphs — `⌨` was measured rendering as `=`, i.e. the marker whose whole job is to aid
+understanding showed a meaningless character. This only surfaces on the finished video.
 
-### `elokeszites:` — amikor a bemutatandó adat nem létezik
+### `setup:` — when the data to be shown does not exist
 
-Ugyanaz a lépés-szótár, de külön böngésző-kontextusban, **asztali** viewporton, felirat és
-reflektor nélkül. Két olyan esetet old meg, amit a felvétel elvileg nem tud:
+The same step vocabulary, but in a separate browser context, on a **desktop** viewport, without
+captions or spotlight. It solves two things the recording cannot:
 
-- **a funkció nincs használatban**, tehát nincs miből „jó példányt" választani. Mérve egy
-  éles ERP-n: 310 rendelés, ebből **0** ütemezett fuvar és **0** jogosult felhasználó — a
-  frissen kiadott kiszállítás-lánc még soha nem futott;
-- **az előállítás MÁS nézetben történik**, mint a bemutatás (az operátor asztali képernyőn
-  ütemez, a sofőr telefonon látja) — egy felvételbe a kettő nem fér, mert a viewport a
-  felvétel tulajdonsága.
+- **the feature is not in use**, so there is no "good instance" to choose from. Measured on a
+  production ERP: 310 orders, of which **0** scheduled runs and **0** eligible users — the
+  freshly released delivery chain had never run;
+- **production happens in a DIFFERENT viewport** than presentation (the operator schedules on a
+  desktop screen, the driver sees it on a phone) — the two do not fit in one recording, because
+  the viewport is a property of the recording.
 
-⚠ Az előkészítés bukása **abortál**: enélkül szép videó készülne egy üres képernyőről, ami
-kívülről pontosan úgy néz ki, mint a siker.
-
-```yaml
-elokeszites:
-  - cimke: "Fuvar kiválasztása"
-    megnyit: /rendelesek
-    valaszt:
-      lista: "button[data-testid^='email-']"
-      tartalmaz: ["Kiszállítás alatt"]
-      kizar: ["kiosztatlan"]          # → a futás ismételhető: mindig friss példányt fog
-    elvaras: "[data-testid='order-panel']"
-  - cimke: "Beütemezés mára"
-    kitolt: { mezo: "[data-testid='input-planned-delivery-date']", ertek: "{{ma}}" }
-  - cimke: "Mentés"
-    kattint: "[data-testid='btn-save-schedule']"
-    elvaras: "text=Ütemezés mentve"
-```
-
-**`{{ma}}` / `{{ma+3}}` / `{{ma-1}}`** — a futás napjára old fel. Beégetett dátummal a
-forgatókönyv másnap **némán** elromlik: a felvétel elkészül, csak nem mutat semmit.
-
-**`benne:`** — a kritérium a SORON értelmes, a kattintás egy benne lévő gombon:
+⚠ A failing setup **aborts**: otherwise a nice video would be produced of an empty screen, which
+from the outside looks exactly like success.
 
 ```yaml
-valaszt:
-  lista: "[data-testid^='delivery-card-']"
-  kizar: ["/ 0 tétel"]                       # ne üres rakományt mutasson
-  benne: "button[data-testid^='btn-details-']"
+setup:
+  - label: "Pick a run"
+    goto: /orders
+    pick:
+      list: "button[data-testid^='order-']"
+      contains: ["In delivery"]
+      excludes: ["unassigned"]          # → the run is repeatable: always a fresh instance
+    expect: "[data-testid='order-panel']"
+  - label: "Schedule for today"
+    fill: { field: "[data-testid='input-planned-delivery-date']", value: "{{today}}" }
+  - label: "Save"
+    click: "[data-testid='btn-save-schedule']"
+    expect: "text=Schedule saved"
 ```
 
-## Három csapda, amit a motor már kezel
+**`{{today}}` / `{{today+3}}` / `{{today-1}}`** resolve to the day of the run. With a hardcoded
+date the scenario breaks **silently** the next day: the recording completes, it just shows
+nothing.
 
-1. **A `playwright-recast` `highlight()`/`markClick()` helperei némán hatástalanok** a
-   Playwright test runneren kívül (`test.step` annotációt írnak, `_step` híján `return`).
-   Ezért injektálja a set-demo a saját rétegét.
-2. **A recast 1920×1080-ba renderel**, ha nem kap `resolution`-t — a portré felvételt
-   vízszintesen szétnyújtja. A vágás átszámítása pedig **tengelyenként külön** skálafaktort
-   igényel, ha a viewport aránya nem egyezik a renderével.
-3. **A kiemelés némán elmaradhat**, ha a cél a viewporton kívül van: a Playwright `hover()`
-   magától görget, a `boundingBox()` nem. A motor odagörget, és minden kiemelést kiír.
+**`within:`** — the criterion makes sense on the ROW, the click belongs on a button inside it:
 
-## Ismert adósság — kimondva
+```yaml
+pick:
+  list: "[data-testid^='delivery-card-']"
+  excludes: ["/ 0 items"]                    # do not show an empty load
+  within: "button[data-testid^='btn-details-']"
+```
 
-- **A forgatókönyv mezőnevei magyarok** (`cimke`, `magyarazat`, `kattint`, `fokusz`…), mert
-  az eszköz egy magyar nyelvű projektből lett kiszervezve, és a meglévő forgatókönyveknek
-  működniük kell. Az angol alias-réteg nyitott feladat.
-- **Nincs teszt.** A motor ma egyetlen valós rendszeren van bizonyítva; önteszt kellene rá.
-- **A GIF-méret nem optimalizált** — sűrű felületen ~70–85 kB/kocka. A vágás (`vago`) a
-  leghatékonyabb kar. (Alapból nem is készül; opt-in.)
+## Field names — English, with Hungarian aliases
 
-## Licenc
+The engine was extracted from a Hungarian project, so the original scenario schema used
+Hungarian field names. **English is the schema**; the Hungarian names are still accepted as
+aliases, resolved once at the boundary (`src/scenario.mjs`) so that nothing downstream ever sees
+two spellings.
+
+| English | Hungarian alias | | English | Hungarian alias |
+|---|---|---|---|---|
+| `title` | `cim` | | `label` | `cimke` |
+| `subtitle` | `alcim` | | `goto` | `megnyit` |
+| `version` | `verzio` | | `click` | `kattint` |
+| `intro` | `bevezeto` | | `pick` | `valaszt` |
+| `viewport` | `nezet` | | `fill` | `kitolt` |
+| `crop` | `vago` | | `press` | `billentyu` |
+| `pace` | `tempo` | | `scroll` | `gorget` |
+| `captions` | `felirat` | | `spotlight` | `fokusz` |
+| `steps` | `lepesek` | | `bubble` | `buborek` |
+| `setup` | `elokeszites` | | `wait` | `varakozas` |
+| `page` | `lap` | | `expect` | `elvaras` |
+| `maxSide` | `maxOldal` | | `note` | `magyarazat` |
+
+Existing recordings keep working: a recording is evidence, and invalidating it because a key was
+renamed would throw away the proof, not improve it.
+
+## The language of the generated page
+
+The package is English; **the page it produces is not necessarily**. The demo goes to whoever
+uses the system, so its boilerplate follows `config.locale` — English and Hungarian ship with
+the package. For any other language pass `config.pageStrings`; waiting for a release to add a
+locale would be the wrong dependency.
+
+## Three traps the engine already handles
+
+1. **`playwright-recast`'s `highlight()`/`markClick()` helpers are silently ineffective**
+   outside the Playwright test runner (they write a `test.step` annotation and, without `_step`,
+   just `return`). That is why set-demo injects its own layer.
+2. **recast renders into 1920×1080** unless given a `resolution` — which stretches a portrait
+   recording horizontally. Converting the crop then needs a **separate scale factor per axis**
+   if the viewport's aspect differs from the render's.
+3. **A highlight can silently go missing** when the target is outside the viewport: Playwright's
+   `hover()` scrolls by itself, `boundingBox()` does not. The engine scrolls there, and prints
+   every highlight.
+
+## Known debt — stated plainly
+
+- **No tests.** The engine is proven on a single real system today; it needs a self-test.
+- **GIF size is not optimised** — ~70–85 kB per frame on a dense UI. The crop (`crop`) is the
+  most effective lever. (It is not produced by default anyway; opt-in.)
+
+## Licence
 
 MIT
