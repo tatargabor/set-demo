@@ -49,7 +49,51 @@ const { ok, lap } = await runDemo({ config, scenarioPath: "docs/demok/pelda.yaml
 | **tempó** | az üresjárat gyorsítása, a cselekvés normál tempóban; „levegő” a kiemelések közt |
 | **mobil nézet** | `nezet: mobil` → 390×844, érintés-emuláció, portré felbontás, kurzor nélkül |
 | **kritérium-választás** | listából a megfelelő példány, kiírva melyik — nem „az első sor” |
+| **előkészítés** | `elokeszites:` — a demó ELŐÁLLÍTJA, amit mutat; külön kontextus, nem kerül a felvételre |
 | **elvárás-kapu** | a demó csak akkor készül el, ha a bemutatott út végigjárható |
+
+### `elokeszites:` — amikor a bemutatandó adat nem létezik
+
+Ugyanaz a lépés-szótár, de külön böngésző-kontextusban, **asztali** viewporton, felirat és
+reflektor nélkül. Két olyan esetet old meg, amit a felvétel elvileg nem tud:
+
+- **a funkció nincs használatban**, tehát nincs miből „jó példányt" választani. Mérve egy
+  éles ERP-n: 310 rendelés, ebből **0** ütemezett fuvar és **0** jogosult felhasználó — a
+  frissen kiadott kiszállítás-lánc még soha nem futott;
+- **az előállítás MÁS nézetben történik**, mint a bemutatás (az operátor asztali képernyőn
+  ütemez, a sofőr telefonon látja) — egy felvételbe a kettő nem fér, mert a viewport a
+  felvétel tulajdonsága.
+
+⚠ Az előkészítés bukása **abortál**: enélkül szép videó készülne egy üres képernyőről, ami
+kívülről pontosan úgy néz ki, mint a siker.
+
+```yaml
+elokeszites:
+  - cimke: "Fuvar kiválasztása"
+    megnyit: /rendelesek
+    valaszt:
+      lista: "button[data-testid^='email-']"
+      tartalmaz: ["Kiszállítás alatt"]
+      kizar: ["kiosztatlan"]          # → a futás ismételhető: mindig friss példányt fog
+    elvaras: "[data-testid='order-panel']"
+  - cimke: "Beütemezés mára"
+    kitolt: { mezo: "[data-testid='input-planned-delivery-date']", ertek: "{{ma}}" }
+  - cimke: "Mentés"
+    kattint: "[data-testid='btn-save-schedule']"
+    elvaras: "text=Ütemezés mentve"
+```
+
+**`{{ma}}` / `{{ma+3}}` / `{{ma-1}}`** — a futás napjára old fel. Beégetett dátummal a
+forgatókönyv másnap **némán** elromlik: a felvétel elkészül, csak nem mutat semmit.
+
+**`benne:`** — a kritérium a SORON értelmes, a kattintás egy benne lévő gombon:
+
+```yaml
+valaszt:
+  lista: "[data-testid^='delivery-card-']"
+  kizar: ["/ 0 tétel"]                       # ne üres rakományt mutasson
+  benne: "button[data-testid^='btn-details-']"
+```
 
 ## Három csapda, amit a motor már kezel
 

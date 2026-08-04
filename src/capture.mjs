@@ -12,18 +12,216 @@ import os from "node:os"
 import { overlayScript, escapeHtml as esc } from "./overlay.mjs"
 
 const MOBIL_NEZET = { width: 390, height: 844 }
+const ASZTALI_NEZET = { width: 1280, height: 800 }
+
+/**
+ * Dátum-helyettesítés a forgatókönyvben: `{{ma}}` és `{{ma+3}}` / `{{ma-1}}` → ISO nap.
+ *
+ * Miért kell: a demónak gyakran MAI dátumot kell beírnia (ütemezés, határidő), a YAML pedig
+ * nem tud számolni. Beégetett dátummal a forgatókönyv másnap némán elromlik — a felvétel
+ * elkészülne, csak épp üres képernyőt mutatna.
+ */
+export function feloldDatum(ertek, most = new Date()) {
+  if (typeof ertek !== "string") return ertek
+  return ertek.replace(/\{\{\s*ma\s*([+-]\s*\d+)?\s*\}\}/g, (_, eltolas) => {
+    const d = new Date(most)
+    if (eltolas) d.setDate(d.getDate() + Number(eltolas.replace(/\s+/g, "")))
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+  })
+}
+
+/**
+ * EGY lépés végrehajtása. Ugyanaz a szótár szolgálja ki a FELVÉTELT és az ELŐKÉSZÍTÉST —
+ * szándékosan egyetlen implementációban.
+ *
+ * ⚠ Két párhuzamos, kézzel karbantartott lépés-értelmező előbb-utóbb szétcsúszik, és a
+ * szétcsúszás iránya a rossz: az előkészítés csendben mást csinálna, mint amit a
+ * forgatókönyv írója a felvételi lépésekből megtanult. A `keret.felvetel` kapcsolja ki a
+ * feliratot, a reflektort és a nézői szüneteket — a CSELEKVÉS azonos marad.
+ */
+async function vegrehajtLepes({ page, lepes, keret }) {
+  const { felvetel, feliratoz, reflektor, reflektorOff, fk, config, cimke } = keret
+
+  if (lepes.megnyit) {
+    await page.goto(`${config.baseUrl}${lepes.megnyit}`, { waitUntil: "networkidle", timeout: 45000 })
+  }
+  // A felirat az akció ELŐTT és UTÁN is kimegy: a kattintás navigációt válthat ki, ami
+  // az injektált sávot a DOM-mal együtt elviszi.
+  if (felvetel) await feliratoz(cimke, lepes.magyarazat)
+
+  // ⚠ A SORREND: buborék a kattintás ELŐTT (hova megyünk), fókusz a kattintás UTÁN (mit
+  // nézzen az eredményen). Fordítva a fókusz olyan elemre várna, amit épp a kattintás
+  // hoz létre.
+  const buborekCel = felvetel && lepes.buborek ? lepes.kattint || lepes.gorget?.hol : null
+  if (buborekCel && (await reflektor(buborekCel, lepes.buborek))) {
+    await page.waitForTimeout(lepes.buborekIdo ?? 1900)
+  }
+
+  if (lepes.kattint) await page.locator(lepes.kattint).first().click()
+
+  // Kritérium szerinti választás listából. Enélkül a demó „az első sort" mutatja, tehát
+  // MINDEN FUTÁS MÁST — és a magyarázat elcsúszhat a képtől. A választott példányt
+  // KIÍRJUK: egy néma választás miatt a következő futás eltérése megmagyarázhatatlan.
+  if (lepes.valaszt) {
+    let jeloltek = page.locator(lepes.valaszt.lista)
+    for (const sz of lepes.valaszt.tartalmaz ?? []) jeloltek = jeloltek.filter({ hasText: sz })
+    for (const sz of lepes.valaszt.kizar ?? []) jeloltek = jeloltek.filter({ hasNotText: sz })
+    const db = await jeloltek.count()
+    if (db === 0) {
+      throw new Error(
+        `Nincs a kritériumnak megfelelő elem: ${JSON.stringify(lepes.valaszt)} — ` +
+          `a demó nem mutathat tetszőleges példányt helyette`
+      )
+    }
+    const valasztott = jeloltek.first()
+    const felirata = ((await valasztott.innerText()) || "").split("\n").slice(0, 2).join(" · ").slice(0, 90)
+    console.log(`      választva (${db} jelöltből): ${felirata}`)
+
+    // ⚠ A KIVÁLASZTÁS és a KATTINTÁS gyakran két KÜLÖNBÖZŐ elem: a kritérium a kártyán/soron
+    // értelmes („ne olyan fuvart mutass, aminek 0 főterméke van"), a cselekvés viszont egy
+    // gombon belül. A `benne:` nélkül a kritériumot a gombra kellene tenni — ahol a
+    // megkülönböztető szöveg nincs is ott —, tehát a demó vagy rossz példányt mutat, vagy
+    // a szerző beéget egy konkrét azonosítót.
+    const cel = lepes.valaszt.benne ? valasztott.locator(lepes.valaszt.benne).first() : valasztott
+    if (lepes.valaszt.benne && (await cel.count()) === 0) {
+      throw new Error(
+        `A választott elemben nincs "${lepes.valaszt.benne}" — a kritérium jó sort talált, ` +
+          `de a cselekvés célja hiányzik belőle`
+      )
+    }
+    await cel.click()
+  }
+
+  if (buborekCel && !lepes.fokusz) await reflektorOff()
+
+  if (felvetel && lepes.fokusz) {
+    if (lepes.kattint) await page.waitForTimeout(lepes.fokusz.utana ?? 900)
+    if (await reflektor(lepes.fokusz.hol, lepes.fokusz.szoveg)) {
+      await page.waitForTimeout(lepes.fokusz.ido ?? 1800)
+    }
+  }
+
+  if (lepes.kitolt) await page.fill(lepes.kitolt.mezo, feloldDatum(lepes.kitolt.ertek))
+  if (lepes.billentyu) await page.keyboard.press(lepes.billentyu)
+
+  if (lepes.gorget) {
+    // Az egeret az elem fölé visszük, hogy a BELSŐ panel görögjön, ne az oldal.
+    const cel = page.locator(lepes.gorget.hol).first()
+    await cel.waitFor({ state: "visible", timeout: 10000 })
+    await cel.hover()
+    // Apró lépés + szünet: a görgetés a nézőnek KÖVETHETŐ legyen, ne ugorjon.
+    const teljes = lepes.gorget.mennyi ?? 400
+    const koz = lepes.gorget.lepeskoz ?? 45
+    const szunet = lepes.gorget.szunet ?? 170
+    const lepesszam = Math.max(1, Math.round(Math.abs(teljes) / koz))
+    for (let k = 0; k < lepesszam; k++) {
+      await page.mouse.wheel(0, teljes / lepesszam)
+      await page.waitForTimeout(szunet)
+    }
+  }
+
+  if (felvetel) {
+    await feliratoz(cimke, lepes.magyarazat)
+    await page.waitForTimeout(lepes.varakozas ?? 2500)
+    if (lepes.fokusz) await reflektorOff()
+  } else if (lepes.varakozas) {
+    // Előkészítésben csak akkor várunk, ha a lépés KIFEJEZETTEN kéri (mentés utáni
+    // újratöltés) — a nézői tempó ott tiszta veszteség.
+    await page.waitForTimeout(Math.min(lepes.varakozas, 3000))
+  }
+
+  // Az ELVÁRÁS teszi a demót bizonyítékká. Hiánya megengedett (pl. tiszta navigáció),
+  // de akkor az a lépés nem bizonyít semmit — a riport ezt külön jelzi.
+  if (lepes.elvaras) {
+    await page.locator(lepes.elvaras).first().waitFor({ state: "visible", timeout: 10000 })
+    return "ok"
+  }
+  return "nincs-elvaras"
+}
+
+/** Lépés-sorozat végrehajtása, lépésenkénti eredménnyel. Nem dob — az eredménybe ír. */
+async function futtatLepeseket({ page, lepesek, keret }) {
+  const eredmenyek = []
+  for (const [i, lepes] of (lepesek || []).entries()) {
+    const cimke = lepes.cimke || `${i + 1}. lépés`
+    try {
+      const allapot = await vegrehajtLepes({ page, lepes, keret: { ...keret, cimke } })
+      eredmenyek.push({ cimke, allapot, magyarazat: lepes.magyarazat })
+      console.log(`  ${allapot === "ok" ? "✓" : "·"} ${cimke}`)
+    } catch (e) {
+      eredmenyek.push({ cimke, allapot: "bukott", hiba: e.message.split("\n")[0].slice(0, 140) })
+      console.log(`  ✗ ${cimke}\n      ${e.message.split("\n")[0].slice(0, 140)}`)
+    }
+  }
+  return eredmenyek
+}
+
+/**
+ * ELŐKÉSZÍTÉS — a demó ELŐÁLLÍTJA, amit mutatni fog.
+ *
+ * Miért külön fázis, és miért NEM kerül a felvételre:
+ *
+ * 1. **Van funkció, amihez elvileg nincs éles adat.** Mérve 2026-08-04: az éles rendszer 310
+ *    rendeléséből NULLA ütemezett fuvar, nulla sofőrhöz rendelés, nulla leigazolás, és
+ *    NULLA sofőr-jogú felhasználó — a kiszállítás-lánc egy nappal a kiadása után még
+ *    elérhetetlen. Ilyenkor a „válasszunk egy jó példányt" stratégia elvileg sem működik.
+ * 2. **Az előállítás gyakran MÁS nézetben történik, mint a bemutatás.** A fuvart az operátor
+ *    ütemezi asztali képernyőn; a demó a sofőr TELEFONJÁT mutatja. Egy felvételbe a kettő
+ *    nem fér: a viewport a felvétel tulajdonsága.
+ * 3. **Az előkészítés nem a történet része.** A néző a funkciót akarja látni, nem azt, hogy
+ *    a demó hogyan gründolta össze magának az adatot.
+ *
+ * ⚠ Az előkészítés bukása ABORTÁL. Enélkül a felvétel lefutna a hiányzó adaton, és egy ÜRES
+ * képernyőről készülne szép videó — ez a néma kudarc osztálya: kívülről pontosan úgy néz ki,
+ * mint a siker.
+ */
+async function elokeszit({ fk, config, chromium, browser }) {
+  const nezet = fk.elokeszitesNezet || ASZTALI_NEZET
+  const ctx = await browser.newContext({ viewport: nezet, locale: config.locale || "hu-HU" })
+  if (config.prepare) await config.prepare(ctx, { mobil: false, nezet })
+  const page = await ctx.newPage()
+  if (config.login) await config.login(ctx, { baseUrl: config.baseUrl, page })
+
+  console.log("  Előkészítés (nem kerül a felvételre):")
+  const eredmenyek = await futtatLepeseket({
+    page,
+    lepesek: fk.elokeszites,
+    keret: { felvetel: false, fk, config },
+  })
+  await ctx.close()
+
+  const bukott = eredmenyek.filter((e) => e.allapot === "bukott")
+  if (bukott.length) {
+    throw new Error(
+      `Az előkészítés ${bukott.length} lépése elhasalt (${bukott.map((b) => b.cimke).join(", ")}) — ` +
+        `a bemutatandó adat NEM áll elő, ezért a felvétel üres képernyőt rögzítene. Nem indítom el.`
+    )
+  }
+  console.log("")
+  return eredmenyek
+}
 
 export async function capture({ fk, config, chromium }) {
   // `nezet: mobil` — a telefonra készült képernyőket asztali viewporton felvenni
   // félrevezető: olyan elrendezést mutatna, amit a felhasználó soha nem lát.
   const mobil = fk.nezet === "mobil" || fk.mobil === true
-  const nezet = mobil ? MOBIL_NEZET : fk.nezet || { width: 1280, height: 800 }
+  const nezet = mobil ? MOBIL_NEZET : fk.nezet || ASZTALI_NEZET
 
   const munkaDir = fs.mkdtempSync(path.join(os.tmpdir(), "set-demo-"))
   const tracesDir = path.join(munkaDir, "test-results", "demo")
   fs.mkdirSync(tracesDir, { recursive: true })
 
   const browser = await chromium.launch({ headless: true })
+
+  if (fk.elokeszites?.length) {
+    try {
+      await elokeszit({ fk, config, chromium, browser })
+    } catch (e) {
+      await browser.close()
+      throw e
+    }
+  }
+
   const ctx = await browser.newContext({
     viewport: nezet,
     locale: config.locale || "hu-HU",
@@ -104,93 +302,11 @@ export async function capture({ fk, config, chromium }) {
     await page.waitForTimeout(fk.tempo?.levego ?? 900)
   }
 
-  const eredmenyek = []
-  for (const [i, lepes] of (fk.lepesek || []).entries()) {
-    const cimke = lepes.cimke || `${i + 1}. lépés`
-    try {
-      if (lepes.megnyit) {
-        await page.goto(`${config.baseUrl}${lepes.megnyit}`, { waitUntil: "networkidle", timeout: 45000 })
-      }
-      // A felirat az akció ELŐTT és UTÁN is kimegy: a kattintás navigációt válthat ki, ami
-      // az injektált sávot a DOM-mal együtt elviszi.
-      await feliratoz(cimke, lepes.magyarazat)
-
-      // ⚠ A SORREND: buborék a kattintás ELŐTT (hova megyünk), fókusz a kattintás UTÁN (mit
-      // nézzen az eredményen). Fordítva a fókusz olyan elemre várna, amit épp a kattintás
-      // hoz létre.
-      const buborekCel = lepes.buborek ? lepes.kattint || lepes.gorget?.hol : null
-      if (buborekCel && (await reflektor(buborekCel, lepes.buborek))) {
-        await page.waitForTimeout(lepes.buborekIdo ?? 1900)
-      }
-
-      if (lepes.kattint) await page.locator(lepes.kattint).first().click()
-
-      // Kritérium szerinti választás listából. Enélkül a demó „az első sort" mutatja, tehát
-      // MINDEN FUTÁS MÁST — és a magyarázat elcsúszhat a képtől. A választott példányt
-      // KIÍRJUK: egy néma választás miatt a következő futás eltérése megmagyarázhatatlan.
-      if (lepes.valaszt) {
-        let jeloltek = page.locator(lepes.valaszt.lista)
-        for (const sz of lepes.valaszt.tartalmaz ?? []) jeloltek = jeloltek.filter({ hasText: sz })
-        for (const sz of lepes.valaszt.kizar ?? []) jeloltek = jeloltek.filter({ hasNotText: sz })
-        const db = await jeloltek.count()
-        if (db === 0) {
-          throw new Error(
-            `Nincs a kritériumnak megfelelő elem: ${JSON.stringify(lepes.valaszt)} — ` +
-              `a demó nem mutathat tetszőleges példányt helyette`
-          )
-        }
-        const valasztott = jeloltek.first()
-        const felirata = ((await valasztott.innerText()) || "").split("\n").slice(0, 2).join(" · ").slice(0, 90)
-        console.log(`      választva (${db} jelöltből): ${felirata}`)
-        await valasztott.click()
-      }
-
-      if (buborekCel && !lepes.fokusz) await reflektorOff()
-
-      if (lepes.fokusz) {
-        if (lepes.kattint) await page.waitForTimeout(lepes.fokusz.utana ?? 900)
-        if (await reflektor(lepes.fokusz.hol, lepes.fokusz.szoveg)) {
-          await page.waitForTimeout(lepes.fokusz.ido ?? 1800)
-        }
-      }
-
-      if (lepes.kitolt) await page.fill(lepes.kitolt.mezo, lepes.kitolt.ertek)
-      if (lepes.billentyu) await page.keyboard.press(lepes.billentyu)
-
-      if (lepes.gorget) {
-        // Az egeret az elem fölé visszük, hogy a BELSŐ panel görögjön, ne az oldal.
-        const cel = page.locator(lepes.gorget.hol).first()
-        await cel.waitFor({ state: "visible", timeout: 10000 })
-        await cel.hover()
-        // Apró lépés + szünet: a görgetés a nézőnek KÖVETHETŐ legyen, ne ugorjon.
-        const teljes = lepes.gorget.mennyi ?? 400
-        const koz = lepes.gorget.lepeskoz ?? 45
-        const szunet = lepes.gorget.szunet ?? 170
-        const lepesszam = Math.max(1, Math.round(Math.abs(teljes) / koz))
-        for (let k = 0; k < lepesszam; k++) {
-          await page.mouse.wheel(0, teljes / lepesszam)
-          await page.waitForTimeout(szunet)
-        }
-      }
-
-      await feliratoz(cimke, lepes.magyarazat)
-      await page.waitForTimeout(lepes.varakozas ?? 2500)
-      if (lepes.fokusz) await reflektorOff()
-
-      // Az ELVÁRÁS teszi a demót bizonyítékká. Hiánya megengedett (pl. tiszta navigáció),
-      // de akkor az a lépés nem bizonyít semmit — a riport ezt külön jelzi.
-      let allapot = "nincs-elvaras"
-      if (lepes.elvaras) {
-        await page.locator(lepes.elvaras).first().waitFor({ state: "visible", timeout: 10000 })
-        allapot = "ok"
-      }
-      eredmenyek.push({ cimke, allapot, magyarazat: lepes.magyarazat })
-      console.log(`  ${allapot === "ok" ? "✓" : "·"} ${cimke}`)
-    } catch (e) {
-      eredmenyek.push({ cimke, allapot: "bukott", hiba: e.message.split("\n")[0].slice(0, 140) })
-      console.log(`  ✗ ${cimke}\n      ${e.message.split("\n")[0].slice(0, 140)}`)
-    }
-  }
+  const eredmenyek = await futtatLepeseket({
+    page,
+    lepesek: fk.lepesek,
+    keret: { felvetel: true, feliratoz, reflektor, reflektorOff, fk, config },
+  })
 
   await ctx.tracing.stop({ path: path.join(tracesDir, "trace.zip") })
   await ctx.close()
