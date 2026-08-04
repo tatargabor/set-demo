@@ -11,7 +11,13 @@ import { escapeHtml as esc } from "./overlay.mjs"
  * ágyazva az az egyetlen, ami magától elindul.
  */
 export function buildPage({ fk, eredmenyek, mp4Path, gifPath, kornyezet = "teszt" }) {
+  // A GIF opt-in (lásd index.mjs). Ha valaki `mozgokep: gif`-et kér, de a fájl nincs meg,
+  // az PROGRAMHIBA — némán videóra váltani rosszabb: a levéltestbe szánt lap csendben
+  // olyat kapna, ami ott nem játszik le.
   const mozgo = fk.lap?.mozgokep === "gif" ? "gif" : "video"
+  if (mozgo === "gif" && !gifPath) {
+    throw new Error("A lap GIF-et kér (lap.mozgokep: gif), de a GIF nem készült el — adj `gif:` blokkot a forgatókönyvhöz.")
+  }
   const b64 = fs.readFileSync(mozgo === "gif" ? gifPath : mp4Path).toString("base64")
   const mozgoTag =
     mozgo === "gif"

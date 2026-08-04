@@ -21,7 +21,8 @@ const yaml = require("js-yaml")
  * @param {object} o.config        a projekt konfigurációja (baseUrl, outDir, login, prepare…)
  * @param {string} o.scenarioPath  a forgatókönyv-YAML útvonala
  * @param {object} [o.chromium]    a Playwright chromium (a hívó adja — peer dependency)
- * @returns {Promise<{ok:boolean, eredmenyek:Array, mp4:string, gif:string, lap:string}>}
+ * @returns {Promise<{ok:boolean, eredmenyek:Array, mp4:string, gif:string|null, lap:string}>}
+ *   A `gif` csak akkor nem `null`, ha a forgatókönyv kifejezetten kérte (`gif:` blokk).
  */
 export async function runDemo({ config, scenarioPath, chromium }) {
   if (!chromium) {
@@ -56,8 +57,26 @@ export async function runDemo({ config, scenarioPath, chromium }) {
   const mp4 = path.join(out, `${nev}.mp4`)
   await renderVideo({ tracesDir, mp4Path: mp4, nezet, mobil, tempo: fk.tempo, maxOldal: fk.maxOldal })
 
-  const gif = path.join(out, `${nev}.gif`)
-  renderGif({ mp4Path: mp4, gifPath: gif, munkaDir, nezet, vago: fk.vago, gif: fk.gif })
+  /**
+   * A GIF OPT-IN — alapból NEM készül.
+   *
+   * ⚠ Korábban feltétel nélkül generálódott, és mérve **senki nem olvasta**: a demó-lap és a
+   * kiadás-lap is videót ágyaz, a `lap.mozgokep: gif` kapcsolót pedig egyetlen forgatókönyv
+   * sem használta. Költsége demónként ~0,4 mp és ~1,4 MB — az idő nem sok, a baj az, hogy a
+   * kiírt „GIF 1421 kB" sor azt sugallta, hogy van egy szállítandó fájl, holott nincs.
+   *
+   * A képesség MEGMARAD, mert egy valós esetet szolgál ki: **levél TÖRZSÉBE ágyazva az
+   * animált GIF az egyetlen, ami magától elindul** — MP4 ott nem játszik. Ha egyszer inline
+   * levelet küldünk, egy `gif:` blokk visszakapcsolja.
+   */
+  const gifKell = !!fk.gif || fk.lap?.mozgokep === "gif"
+  const gifUt = path.join(out, `${nev}.gif`)
+  const gif = gifKell ? gifUt : null
+  if (gifKell) renderGif({ mp4Path: mp4, gifPath: gif, munkaDir, nezet, vago: fk.vago, gif: fk.gif })
+  // ⚠ A KORÁBBI futás GIF-jét TÖRÖLJÜK, ha most már nem kell. Enélkül a mappában ottmarad
+  // egy elavult fájl, amit a következő ember kiküldhet — és az a felvétel egy RÉGI állapotot
+  // mutatna. A néma elavulás kívülről megkülönböztethetetlen az érvényes kimenettől.
+  else if (fs.existsSync(gifUt)) fs.rmSync(gifUt)
 
   const lap = path.join(out, `${nev}.html`)
   fs.writeFileSync(lap, buildPage({ fk, eredmenyek, mp4Path: mp4, gifPath: gif, kornyezet: config.kornyezet }))
@@ -65,7 +84,8 @@ export async function runDemo({ config, scenarioPath, chromium }) {
   fs.rmSync(munkaDir, { recursive: true, force: true })
 
   const kb = (f) => `${Math.round(fs.statSync(f).size / 1024)} kB`
-  console.log(`\n  GIF  ${kb(gif)}  ${gif}`)
+  console.log("")
+  if (gif) console.log(`  GIF  ${kb(gif)}  ${gif}`)
   console.log(`  MP4  ${kb(mp4)}  ${mp4}`)
   console.log(`  lap  ${kb(lap)}  ${lap}`)
 

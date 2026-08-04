@@ -1,9 +1,9 @@
 # set-demo
 
-**Funkció-demó felvétel valós webalkalmazásról.** Egy forgatókönyv-YAML-ből GIF + MP4 +
-önhordó HTML lapot készít — kurzorral, reflektorral, magyarázat-sávval —, és a felvétel
+**Funkció-demó felvétel valós webalkalmazásról.** Egy forgatókönyv-YAML-ből **MP4-et és
+önhordó HTML lapot** készít — kurzorral, reflektorral, magyarázat-sávval —, és a felvétel
 **egyben végigpróba**: minden lépéshez elvárás tartozhat, és ha egy nem teljesül, a futás
-hangosan elhasal.
+hangosan elhasal. (GIF csak kérésre — lásd lentebb.)
 
 > **Miért:** a release notes szövege önmagában nem viszi át az új funkciót, a nagy
 > kézikönyvben pedig senki nem találja meg, mi változott. Egy funkcióhoz egy lap, egy
@@ -43,6 +43,7 @@ const { ok, lap } = await runDemo({ config, scenarioPath: "docs/demok/pelda.yaml
 
 | | |
 |---|---|
+| **kimenet** | **MP4 + önhordó HTML lap**. GIF csak kérésre (`gif:` blokk) — lásd lentebb |
 | **kurzor + kattintás-hullám** | a Playwright trace-ből, a `playwright-recast`-tal |
 | **tett-jelzés** | *mit* csinálunk, nem csak hol: gyűrű + címke a beírásra, billentyűre, görgetésre, kattintásra |
 | **reflektor** | tetszőleges terület kiemelése: keret + háttér-sötétítés + rövid szöveg |
@@ -52,6 +53,23 @@ const { ok, lap } = await runDemo({ config, scenarioPath: "docs/demok/pelda.yaml
 | **kritérium-választás** | listából a megfelelő példány, kiírva melyik — nem „az első sor” |
 | **előkészítés** | `elokeszites:` — a demó ELŐÁLLÍTJA, amit mutat; külön kontextus, nem kerül a felvételre |
 | **elvárás-kapu** | a demó csak akkor készül el, ha a bemutatott út végigjárható |
+
+### A GIF OPT-IN — alapból csak MP4 készül
+
+A demó-lap és a kiadás-lap is **videót** ágyaz. Mérve ugyanarra a 7 lépéses demóra:
+**GIF 1,2 MB ugrálva** vs. **MP4 1,3 MB, 25 fps-en simán** — a GIF minden kockát teljes
+képként tárol, ezért kell ritkán mintavételezni, és ezért ugrik benne a görgetés.
+
+Korábban a GIF feltétel nélkül készült, és **senki nem olvasta**: költsége demónként ~0,4 mp
+és ~1,4 MB, a kiírt „GIF 1421 kB" sor pedig azt sugallta, hogy van egy szállítandó fájl.
+
+A képesség megmarad, mert egy valós esetet szolgál ki: **levél TÖRZSÉBE ágyazva az animált
+GIF az egyetlen, ami magától elindul** (MP4 ott nem játszik). Visszakapcsolás:
+
+```yaml
+gif: { fps: 1.6, kockahossz: 0.9, szelesseg: 900 }   # → a GIF elkészül
+lap: { mozgokep: gif }                                # → a LAP is GIF-et ágyaz
+```
 
 ### Két jelzés, két jelentés — ne mosd össze
 
@@ -131,7 +149,7 @@ valaszt:
   működniük kell. Az angol alias-réteg nyitott feladat.
 - **Nincs teszt.** A motor ma egyetlen valós rendszeren van bizonyítva; önteszt kellene rá.
 - **A GIF-méret nem optimalizált** — sűrű felületen ~70–85 kB/kocka. A vágás (`vago`) a
-  leghatékonyabb kar.
+  leghatékonyabb kar. (Alapból nem is készül; opt-in.)
 
 ## Licenc
 
