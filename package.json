@@ -4,6 +4,13 @@
   "description": "Funkció-demó felvétel valós webalkalmazásról: forgatókönyv-YAML → GIF + MP4 + önhordó HTML lap, kurzorral, reflektorral és elvárás-kapuval.",
   "type": "module",
   "license": "MIT",
+  "author": "Gábor Tatár",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tatargabor/set-demo.git"
+  },
+  "homepage": "https://github.com/tatargabor/set-demo#readme",
+  "bugs": "https://github.com/tatargabor/set-demo/issues",
   "bin": {
     "set-demo": "src/cli.mjs"
   },
