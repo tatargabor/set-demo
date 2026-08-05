@@ -64,6 +64,37 @@ export async function runDemo({ config, scenarioPath, chromium }) {
   await renderVideo({ tracesDir, mp4Path: mp4, viewport, mobile, pace: scenario.pace, maxSide: scenario.maxSide })
 
   /**
+   * ⚠ A GREEN RUN CAN STILL PRODUCE AN UNUSABLE FILE — say so, loudly.
+   *
+   * The walkthrough proves the FEATURE works; it proves nothing about the RECORDING. Measured
+   * 2026-08-05: every step green, and the output was a **89 kB, blank white** MP4 (a secondary
+   * page's recording had won the render). That root cause is fixed in `capture.mjs` — but the
+   * failure MODE is not specific to it: any rendering problem produces the same shape, and
+   * "all steps ✓" reads as success.
+   *
+   * The threshold is deliberately crude. A precise one would need to know what the scenario
+   * shows; this only has to separate "a real recording" from "essentially nothing", and the
+   * measured gap there is two orders of magnitude (89 kB vs 4.8–8.6 MB). A tighter bound would
+   * produce false alarms on short scenarios — and an alarm nobody trusts is worse than none.
+   *
+   * ⚠ WHAT THIS DOES **NOT** COVER, stated so a green size check is not mistaken for proof:
+   * it guards against "essentially nothing", not against "partly wrong". A recording that is
+   * fine for half the steps and blank afterwards lands far above the threshold and passes
+   * silently. That is a different failure class, and it stays unguarded — deliberately, since
+   * catching it would mean judging CONTENT, which no file-size rule can do.
+   */
+  const mp4Bytes = fs.statSync(mp4).size
+  const MIN_PLAUSIBLE_BYTES = 250_000
+  if (mp4Bytes < MIN_PLAUSIBLE_BYTES) {
+    console.log(
+      `\n  ⚠ THE VIDEO IS SUSPICIOUSLY SMALL: ${Math.round(mp4Bytes / 1024)} kB. A real recording is\n` +
+        `    megabytes. Open it before sending it out — a blank render looks exactly like a\n` +
+        `    successful run from here. (A known cause, now fixed: a page opened by the app\n` +
+        `    winning the render — see capture.mjs.)\n`
+    )
+  }
+
+  /**
    * The GIF is OPT-IN — it is NOT produced by default.
    *
    * ⚠ It used to be generated unconditionally, and measurement showed **nobody read it**: both
