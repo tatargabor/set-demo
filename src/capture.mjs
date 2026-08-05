@@ -414,7 +414,35 @@ export async function capture({ scenario, config, chromium }) {
   })
 
   await ctx.tracing.stop({ path: path.join(tracesDir, "trace.zip") })
-  await ctx.close()
+
+  // ⚠ WHICH page's video gets rendered — the ONE-TAB assumption, measured and broken.
+  //
+  // `Recast.from(dir)` finds the source video by taking the FIRST `*.webm` in readdir order
+  // (`pipeline/executor.js` → `findSourceVideo`). That is correct while a run has exactly one
+  // page. It stops being correct the moment the app opens a tab: Playwright then writes a
+  // SECOND `page@<hash>.webm`, and readdir order decides which one the render uses.
+  //
+  // Measured 2026-08-05 (wpc-pont, quote issuing → `window.open` for the generated PDF): the
+  // run reported every step green, and produced an **89 kB, 37-second, blank white** MP4 with
+  // only the cursor overlay on it — the popup tab's 3 kB video had won. The failure is silent
+  // in the worst way: the walkthrough passes, so nothing signals that the artifact is unusable.
+  //
+  // `page.video().path()` names the main page's file EXACTLY, so this needs no heuristic (a
+  // "largest file wins" rule would be a guess, and would break on a long-lived popup). We keep
+  // that file and remove the other recordings before the render runs.
+  const mainVideo = await page.video()?.path().catch(() => null)
+  await ctx.close() // the video files are only finalised on close
+  if (mainVideo) {
+    for (const dir of [tracesDir]) {
+      for (const file of fs.readdirSync(dir)) {
+        if (!file.endsWith(".webm")) continue
+        const full = path.join(dir, file)
+        if (path.resolve(full) === path.resolve(mainVideo)) continue
+        fs.rmSync(full, { force: true })
+        console.log(`  discarded a secondary page recording: ${file} (the app opened a tab)`)
+      }
+    }
+  }
   await browser.close()
 
   return { results, findings, workDir, tracesDir: path.join(workDir, "test-results"), viewport, mobile }
